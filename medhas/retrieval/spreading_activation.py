@@ -5,6 +5,7 @@ class SpreadingActivationEngine:
         self.decay = decay
         self.threshold = threshold
 
+
     def query(
         self,
         query_emb: list,
@@ -12,18 +13,33 @@ class SpreadingActivationEngine:
         vector_index,
         max_hops: int = 2
     ) -> List[Dict[str, Any]]:
-        seeds = vector_index.search(query_emb, top_k=5)
-        if not seeds:
-            return []
+        seeds = vector_index.search(query_emb, top_k=8)
+        
+        # Adaptive seed selection
+        activations: Dict[str, float] = {}
+        if seeds:
+            for node_id, sim in seeds:
+                if sim >= 0.35:
+                    activations[node_id] = sim
+            if not activations:
+                for node_id, sim in seeds:
+                    if sim >= 0.15:
+                        activations[node_id] = sim
+            if not activations:
+                # Use top seeds
+                for node_id, sim in seeds[:3]:
+                    activations[node_id] = max(sim, 0.5)
 
-        # Adaptive thresholding: filter seeds >= 0.40, falling back to >= 0.20 or top seeds
-        activations: Dict[str, float] = {node_id: sim for node_id, sim in seeds if sim >= 0.40}
+        # Fallback: query all active nodes if no seeds found from vector index
         if not activations:
-            activations = {node_id: sim for node_id, sim in seeds if sim >= 0.20}
-        if not activations and seeds:
-            activations = {seeds[0][0]: seeds[0][1]}
-            if len(seeds) > 1:
-                activations[seeds[1][0]] = seeds[1][1]
+            try:
+                df_all = kuzu_engine.execute("MATCH (e:Entity) RETURN e.id LIMIT 10").get_as_df()
+                if not df_all.empty:
+                    for nid in df_all['e.id']:
+                        activations[nid] = 0.5
+            except Exception:
+                pass
+
         if not activations:
             return []
 
@@ -42,7 +58,10 @@ class SpreadingActivationEngine:
                     WHERE r.valid_to = 0.0
                     RETURN a.id, r.relation, b.id, r.reason, r.salience, r.weight
                 '''
-                res = kuzu_engine.execute(query_cypher, {"nid": node_id}).get_as_df()
+                try:
+                    res = kuzu_engine.execute(query_cypher, {"nid": node_id}).get_as_df()
+                except Exception:
+                    continue
 
                 for _, row in res.iterrows():
                     # Canonical unique key for undirected fact representation
@@ -56,14 +75,15 @@ class SpreadingActivationEngine:
                             "relation": row['r.relation'],
                             "target": row['b.id'],
                             "reason": row['r.reason'],
-                            "activation_score": round(energy * row['r.salience'], 4)
+                            "activation_score": round(float(energy) * float(row['r.salience']), 4)
                         })
 
                     target_node = row['b.id']
-                    propagated = energy * row['r.weight'] * row['r.salience'] * self.decay
+                    propagated = float(energy) * float(row['r.weight']) * float(row['r.salience']) * self.decay
                     next_frontier[target_node] = max(next_frontier.get(target_node, 0.0), propagated)
 
             curr_frontier = next_frontier
 
         retrieved_facts.sort(key=lambda x: x['activation_score'], reverse=True)
         return retrieved_facts
+
