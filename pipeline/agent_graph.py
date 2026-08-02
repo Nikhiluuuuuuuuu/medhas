@@ -88,7 +88,20 @@ class UnifiedMemoryEngine:
             # 5. Log Assistant Turn (Layer 1: Convex)
             await session_mem.log_message(session_id, "assistant", final_text)
 
-            # 6. ASYNC PATH: Fire non-blocking Cognee ECL background extraction task
-            asyncio.create_task(extract_and_persist_background(user_id, user_message, final_text, session_id=session_id))
+            # 6. ASYNC PATH: Fire non-blocking Cognee ECL background extraction task.
+            # Supervised fire-and-forget: exceptions are logged rather than silently lost.
+            task = asyncio.create_task(
+                extract_and_persist_background(user_id, user_message, final_text, session_id=session_id)
+            )
+            task.add_done_callback(_log_task_failure)
 
             return final_text
+
+
+def _log_task_failure(task: "asyncio.Task[None]") -> None:
+    """Surface exceptions from supervised background tasks (no silent failures)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log_error(f"Background extraction task failed: {exc}")

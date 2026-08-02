@@ -2,18 +2,12 @@
 
 import json
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
 from infrastructure.db import DatabasePool
+from schemas import WorkingMemoryBlocks, MemoryBlock
 from memory.working.get_blocks import get_blocks
 from utils import measure_latency, log_working, log_error
 from core.exceptions import StorageOperationError, MemoryBlockNotFoundError
 
-class CoreMemoryBlock(BaseModel):
-    """Letta-style structured memory block with label, description, value, and token limits."""
-    label: str
-    description: str = ""
-    value: str = ""
-    limit_tokens: int = 1000
 
 async def create_memory_block(
     user_id: str,
@@ -22,21 +16,24 @@ async def create_memory_block(
     value: str = "",
     limit_tokens: int = 1000
 ) -> Dict[str, Any]:
-    """Create a new dynamic core memory block in working memory RAM."""
+    """Create a new dynamic core memory block in working memory RAM.
+
+    Blocks are stored in a label->MemoryBlock registry (Letta/MemGPT model),
+    so arbitrary custom blocks persist instead of being dropped on re-validation.
+    """
     async with measure_latency(f"memory.working.create_memory_block ({label})"):
         try:
             record = await get_blocks(user_id)
-            current_blocks = record.blocks.model_dump()
-            
+            blocks = record.blocks.to_block_map()
+
             clean_label = label.lower().strip()
-            block_obj = CoreMemoryBlock(
+            block_obj = MemoryBlock(
                 label=clean_label,
                 description=description,
                 value=value,
                 limit_tokens=limit_tokens
-            ).model_dump()
-
-            current_blocks[clean_label] = block_obj
+            )
+            blocks[clean_label] = block_obj
 
             async with DatabasePool.acquire() as conn:
                 await conn.execute(
@@ -47,10 +44,10 @@ async def create_memory_block(
                     DO UPDATE SET blocks = $2::jsonb, updated_at = CURRENT_TIMESTAMP;
                     """,
                     user_id,
-                    json.dumps(current_blocks)
+                    WorkingMemoryBlocks.from_block_map(blocks).model_dump_json()
                 )
                 log_working(f"✨ [LETTA OMNI-TOOL] Created core memory block: [bold white]'{clean_label}'[/bold white]")
-                return block_obj
+                return block_obj.model_dump()
         except Exception as e:
             log_error(f"Create memory block error: {e}")
             raise StorageOperationError(f"Create memory block failed: {e}")
@@ -60,13 +57,13 @@ async def delete_memory_block(user_id: str, label: str) -> Dict[str, Any]:
     async with measure_latency(f"memory.working.delete_memory_block ({label})"):
         try:
             record = await get_blocks(user_id)
-            current_blocks = record.blocks.model_dump()
+            blocks = record.blocks.to_block_map()
             clean_label = label.lower().strip()
 
-            if clean_label not in current_blocks:
+            if clean_label not in blocks:
                 raise MemoryBlockNotFoundError(f"Memory block '{clean_label}' not found.")
 
-            deleted = current_blocks.pop(clean_label)
+            deleted = blocks.pop(clean_label)
 
             async with DatabasePool.acquire() as conn:
                 await conn.execute(
@@ -76,7 +73,7 @@ async def delete_memory_block(user_id: str, label: str) -> Dict[str, Any]:
                     WHERE user_id = $1;
                     """,
                     user_id,
-                    json.dumps(current_blocks)
+                    WorkingMemoryBlocks.from_block_map(blocks).model_dump_json()
                 )
                 log_working(f"🗑️ [LETTA OMNI-TOOL] Deleted core memory block: [bold white]'{clean_label}'[/bold white]")
                 return {"status": "success", "deleted_label": clean_label}
@@ -89,19 +86,18 @@ async def append_to_memory_block(user_id: str, label: str, content: str) -> Dict
     async with measure_latency(f"memory.working.append_to_memory_block ({label})"):
         try:
             record = await get_blocks(user_id)
-            current_blocks = record.blocks.model_dump()
+            blocks = record.blocks.to_block_map()
             clean_label = label.lower().strip()
 
-            existing = current_blocks.get(clean_label)
-            if isinstance(existing, dict):
-                current_val = existing.get("value", "")
-                new_val = f"{current_val}\n{content}".strip() if current_val else content
-                existing["value"] = new_val
-                current_blocks[clean_label] = existing
-            else:
-                current_val = str(existing or "")
-                new_val = f"{current_val}\n{content}".strip() if current_val else content
-                current_blocks[clean_label] = new_val
+            existing = blocks.get(clean_label)
+            if existing is None:
+                existing = MemoryBlock(label=clean_label, value="")
+                blocks[clean_label] = existing
+
+            current_val = existing.value or ""
+            new_val = f"{current_val}\n{content}".strip() if current_val else content
+            existing.value = new_val
+            blocks[clean_label] = existing
 
             async with DatabasePool.acquire() as conn:
                 await conn.execute(
@@ -111,7 +107,7 @@ async def append_to_memory_block(user_id: str, label: str, content: str) -> Dict
                     WHERE user_id = $1;
                     """,
                     user_id,
-                    json.dumps(current_blocks)
+                    WorkingMemoryBlocks.from_block_map(blocks).model_dump_json()
                 )
                 log_working(f"📝 [LETTA OMNI-TOOL] Appended to block: [bold white]'{clean_label}'[/bold white]")
                 return {"label": clean_label, "updated_value": new_val}
@@ -124,20 +120,16 @@ async def audit_memory_doctor(user_id: str) -> Dict[str, Any]:
     async with measure_latency("memory.working.audit_memory_doctor"):
         try:
             record = await get_blocks(user_id)
-            blocks_dict = record.blocks.model_dump()
+            blocks_map = record.blocks.to_block_map()
 
             block_stats = []
             total_estimated_tokens = 0
             warnings = []
 
-            for key, val in blocks_dict.items():
-                if isinstance(val, dict):
-                    content = val.get("value", "")
-                    limit = val.get("limit_tokens", 1000)
-                else:
-                    content = str(val or "")
-                    limit = 1000
-                
+            for key, block in blocks_map.items():
+                content = block.value or ""
+                limit = block.limit_tokens or 1000
+
                 # Approximate 1 token = 4 characters
                 token_count = max(1, len(content) // 4)
                 total_estimated_tokens += token_count
@@ -151,7 +143,7 @@ async def audit_memory_doctor(user_id: str) -> Dict[str, Any]:
                 if token_count > limit:
                     stats["status"] = "bloated"
                     warnings.append(f"Block '{key}' exceeds limit ({token_count}/{limit} tokens). Recommend compacting.")
-                
+
                 block_stats.append(stats)
 
             recommendation = "Memory health optimal." if not warnings else " ".join(warnings)

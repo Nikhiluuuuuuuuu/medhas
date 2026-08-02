@@ -2,12 +2,14 @@
 
 from typing import List, Dict, Any, Optional
 from uuid import UUID
+from datetime import datetime, timezone
 from infrastructure.db import DatabasePool
 from infrastructure.llm import FastEmbeddingProvider
 from schemas import FactSearchResult
 from config import settings
 from utils import measure_latency, log_atomic, log_error
 from core.exceptions import StorageOperationError
+from memory.atomic.ebbinghaus_decay import calculate_ebbinghaus_retention
 
 embedder = FastEmbeddingProvider()
 
@@ -92,15 +94,26 @@ async def search_facts(
                 keyword_ranks: Dict[UUID, int] = {r["id"]: i + 1 for i, r in enumerate(fts_sorted)}
 
                 # Calculate Multi-Signal RRF score: 1 / (60 + r1) + 1 / (60 + r2)
+                # Then apply Mem0/Cognee-inspired importance × Ebbinghaus recency
+                # decay so that high-value, recently-reinforced facts rank higher.
                 results: List[FactSearchResult] = []
+                _composite: Dict[UUID, float] = {}
                 for r in rows:
                     fid = r["id"]
                     r_vec = vector_ranks.get(fid, 100)
                     r_kw = keyword_ranks.get(fid, 100)
-                    
+
                     rrf_val = (1.0 / (60.0 + r_vec)) + (1.0 / (60.0 + r_kw))
                     sim = float(r["decayed_similarity"])
                     fuzzy_score = calculate_fuzzy_match_score(r["fact_text"])
+
+                    # Importance weight (1..10 -> 0.1..1.0) × Ebbinghaus retention (0..1)
+                    importance_norm = max(0.1, min(1.0, float(r["importance_score"]) / 10.0))
+                    retention = calculate_ebbinghaus_retention(
+                        r["created_at"] if isinstance(r["created_at"], datetime)
+                        else datetime.now(timezone.utc)
+                    )
+                    composite_score = rrf_val * importance_norm * retention
 
                     # Include if vector similarity matches, FTS matches, or fuzzy typo-tolerant match succeeds
                     if sim >= 0.40 or float(r["fts_rank"]) > 0.1 or fuzzy_score > 0.5:
@@ -114,10 +127,13 @@ async def search_facts(
                             session_id=r["session_id"],
                             agent_id=r["agent_id"]
                         ))
+                        # stash composite score for ranking (not part of schema)
+                        _composite[fid] = composite_score
 
-                # Sort by RRF score if enabled, else by decayed similarity
+                # Sort by composite (importance×retention-decayed RRF) when RRF enabled,
+                # otherwise by decayed similarity. RRF score is still returned for inspection.
                 if apply_rrf:
-                    results.sort(key=lambda x: x.rrf_score, reverse=True)
+                    results.sort(key=lambda x: _composite.get(x.id, x.rrf_score), reverse=True)
                 else:
                     results.sort(key=lambda x: x.similarity, reverse=True)
 

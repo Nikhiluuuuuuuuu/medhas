@@ -11,13 +11,18 @@ async def update_block(user_id: str, block_name: str, content: str) -> WorkingMe
     """Update a specific named block in working memory."""
     async with measure_latency(f"memory.working.update_block ({block_name})"):
         record = await get_blocks(user_id)
-        current_blocks = record.blocks.model_dump()
-        
-        if block_name not in current_blocks:
-            raise MemoryBlockNotFoundError(f"Block '{block_name}' does not exist in working memory blocks.")
+        blocks = record.blocks.to_block_map()
 
-        current_blocks[block_name] = content
-        updated_blocks = WorkingMemoryBlocks(**current_blocks)
+        clean_name = block_name.lower().strip()
+        if clean_name not in blocks:
+            raise MemoryBlockNotFoundError(f"Block '{clean_name}' does not exist in working memory blocks.")
+
+        # Preserve existing metadata (description / limit) and only swap value.
+        existing = blocks[clean_name]
+        existing.value = content
+        blocks[clean_name] = existing
+
+        updated_blocks = WorkingMemoryBlocks.from_block_map(blocks)
 
         try:
             async with DatabasePool.acquire() as conn:
@@ -33,7 +38,7 @@ async def update_block(user_id: str, block_name: str, content: str) -> WorkingMe
                     updated_blocks.model_dump_json()
                 )
                 assert row is not None, "Working memory block update failed"
-                log_working(f"Updated block [bold white]'{block_name}'[/bold white] for user [bold white]{user_id}[/bold white]")
+                log_working(f"Updated block [bold white]'{clean_name}'[/bold white] for user [bold white]{user_id}[/bold white]")
                 return WorkingMemoryRecord(
                     user_id=row["user_id"],
                     blocks=updated_blocks,

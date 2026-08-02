@@ -2,7 +2,7 @@
 
 import json
 from infrastructure.db import DatabasePool
-from schemas import WorkingMemoryBlocks, WorkingMemoryRecord
+from schemas import WorkingMemoryBlocks, MemoryBlock, WorkingMemoryRecord
 from utils import measure_latency, logger
 from core.exceptions import StorageOperationError
 
@@ -40,9 +40,20 @@ async def get_blocks(user_id: str) -> WorkingMemoryRecord:
                 else:
                     block_dict = dict(raw_blocks)
 
+                # Source of truth is the per-block "extra" namespace (full MemoryBlock
+                # dicts). Rebuild the registry from it so custom blocks survive round-trips.
+                block_map = {}
+                for label, val in block_dict.items():
+                    if isinstance(val, dict) and "value" in val and "label" in val:
+                        block_map[label] = MemoryBlock(**val)
+                    elif isinstance(val, dict) and "value" in val:
+                        block_map[label] = MemoryBlock(label=label, **val)
+                    elif isinstance(val, str):
+                        block_map[label] = MemoryBlock(label=label, value=val)
+
                 return WorkingMemoryRecord(
                     user_id=row["user_id"],
-                    blocks=WorkingMemoryBlocks(**block_dict),
+                    blocks=WorkingMemoryBlocks.from_block_map(block_map),
                     updated_at=row["updated_at"]
                 )
         except Exception as e:

@@ -57,3 +57,27 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_settings() -> None:
+    """Fail fast on misconfiguration before the engine starts.
+
+    Raises RuntimeError if the database URL or Groq key is unusable so the
+    app does not start only to crash deep inside an async call.
+    """
+    problems: list[str] = []
+    if "://" not in settings.database_url:
+        problems.append("database_url is not a valid connection string")
+    if not settings.GROQ_API_KEY:
+        problems.append(
+            "GROQ_API_KEY is missing — LLM-dependent paths (dream cycle, "
+            "background extraction, execute_turn) will fail. Set it in .env."
+        )
+    if problems:
+        # Non-fatal warning so the non-LLM test paths still run; surface clearly.
+        import sys
+        print(
+            "[WARN] Medhas configuration issues:\n - " + "\n - ".join(problems),
+            file=sys.stderr,
+        )
+

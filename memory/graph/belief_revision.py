@@ -35,6 +35,18 @@ async def update_bayesian_belief(
                         if "belief_confidence" in attrs:
                             prior_probability = float(attrs["belief_confidence"])
 
+                    # Ensure the node exists (Graphiti-style: create-on-write).
+                    if row is None:
+                        await conn.execute(
+                            """
+                            INSERT INTO graph_nodes (user_id, name, entity_type, attributes)
+                            VALUES ($1, $2, 'Entity', '{}'::jsonb)
+                            ON CONFLICT (user_id, name) DO NOTHING;
+                            """,
+                            user_id,
+                            belief_node_name
+                        )
+
                     # Ensure prior stays within bounds (0.01 to 0.99)
                     prior_probability = max(0.01, min(0.99, prior_probability))
 
