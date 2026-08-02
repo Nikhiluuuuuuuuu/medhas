@@ -1,11 +1,13 @@
-# Unified 4-in-1 AI Agent Memory Engine
+# Unified 6-in-1 AI Agent Memory Engine
 
-A production-grade, ultra-low-latency local AI agent memory engine built in **Python 3.11+** that synthesizes the 4 major memory paradigms into a single unified architecture:
+A production-grade, ultra-low-latency local AI agent memory engine built in **Python 3.11+** that synthesizes the 6 major memory paradigms (Mem0, Cognee, Letta, Zep/Graphiti, HippoRAG, LightRAG) into a single unified architecture:
 
 1. **Layer 1: Base Session Audit Log (Convex)** — Immutable message logging, history retrieval, and session metadata tracking.
-2. **Layer 2: Working Memory RAM (Letta)** — Dynamic JSONB prompt RAM blocks (`user_profile`, `scratchpad`, `active_goals`, `persona`) editable by the agent mid-session via tool calling.
-3. **Layer 3: Atomic Fact Engine (Mem0)** — HNSW vector cosine similarity search, automatic preference extraction, deduplication, and soft-deletion (`is_active = FALSE`).
-4. **Layer 4: Bi-Temporal Knowledge Graph (Zep / Graphiti)** — Entity node canonicalization, bi-temporal relationship validity (`valid_from`, `valid_to`), and point-in-time state queries.
+2. **Layer 2: Working Memory RAM (Letta)** — Dynamic JSONB prompt RAM blocks (`user_profile`, `scratchpad`, `active_goals`, `persona`, + custom) editable by the agent mid-session via tool calling, plus a cold archival store (`archive_memory` / `recall_archival`).
+3. **Layer 3: Atomic Fact Engine (Mem0)** — HNSW vector + BM25 hybrid search, MD5 hash deduplication, LLM decision matrix (ADD/UPDATE/DELETE/NO_CHANGE), and soft-deletion (`is_active = FALSE`).
+4. **Layer 4: Bi-Temporal Knowledge Graph (Zep / Graphiti)** — Entity node canonicalization + semantic merge, bi-temporal edge validity (`valid_from`, `valid_to`), and point-in-time state queries.
+5. **Layer 5: Knowledge-Graph Ingestion (Cognee)** — Background episode-anchored extraction pipeline with last-K conversation context and entity resolution.
+6. **Layer 6: Associative & Dual-Level Retrieval (HippoRAG / LightRAG)** — Spreading-activation / Personalized PageRank boost over the entity graph, plus `naive` / `local` / `global` / `hybrid` retrieval modes.
 
 ---
 

@@ -1,6 +1,7 @@
 """Application Configuration Module using Pydantic Settings."""
 
 from dotenv import load_dotenv
+from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv(override=True)
@@ -40,6 +41,12 @@ class Settings(BaseSettings):
     TOP_K_FACTS: int = 5
     FACT_SIMILARITY_THRESHOLD: float = 0.70
     MAX_HISTORICAL_MESSAGES: int = 10
+
+    # Atomic dedup / decision-matrix (Mem0-inspired)
+    FACT_HASH_DEDUP: bool = True          # Skip re-insert if an active fact with same md5 hash exists
+    FACT_SEMANTIC_DUP_THRESHOLD: float = 0.92   # cosine above which two facts are "same claim"
+    FACT_SEMANTIC_UPDATE_THRESHOLD: float = 0.78  # cosine above which incoming supersedes existing
+    DECISION_MATRIX_MODEL: Optional[str] = None  # LLM model for the Mem0 decision matrix (None=default)
     
     model_config = SettingsConfigDict(
         env_file=".env",

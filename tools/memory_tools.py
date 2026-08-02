@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 from memory.working import update_block, create_memory_block, delete_memory_block, append_to_memory_block, audit_memory_doctor
 from memory.graph import query_point_in_time, query_subgraph
 from memory.atomic import search_facts
+from memory.archival import archive_memory, recall_archival, retrieve_memory
 from utils import measure_latency, log_tool, log_error
 
 MEMORY_TOOLS_DECLARATION: List[Dict[str, Any]] = [
@@ -79,12 +80,41 @@ MEMORY_TOOLS_DECLARATION: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "archive_memory",
+            "description": "Letta archival: moves a fact/detail into cold long-term storage (out of the prompt) so it can be recalled later on demand. Use for low-frequency but durable info.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The memory content to archive into cold storage."}
+                },
+                "required": ["content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "archival_memory_search",
-            "description": "Searches long-term archival vector memory for past facts, preferences, or technical details.",
+            "description": "Searches long-term archival (cold) vector memory for past facts, preferences, or technical details.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Semantic search query to search long-term memory."}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "retrieve_memory",
+            "description": "LightRAG dual-level retrieval: 'naive' (vector only), 'local' (entity facts + relationships), 'global' (graph/theme summary), or 'hybrid' (both). Returns the most relevant memory for the query.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The retrieval query."},
+                    "mode": {"type": "string", "description": "One of: naive, local, global, hybrid", "enum": ["naive", "local", "global", "hybrid"]}
                 },
                 "required": ["query"]
             }
@@ -137,13 +167,25 @@ async def execute_tool_call(user_id: str, tool_name: str, args: Dict[str, Any]) 
                 res = await audit_memory_doctor(user_id)
                 return f"Memory doctor audit results: {res}"
 
+            elif tool_name == "archive_memory":
+                content = args.get("content", "")
+                mid = await archive_memory(user_id, content)
+                return f"Archived to cold storage (id={mid})."
+
             elif tool_name == "archival_memory_search":
                 query = args.get("query", "")
-                facts = await search_facts(user_id, query, limit=5)
-                if not facts:
-                    return f"No relevant archival memory facts found for query: '{query}'"
-                fact_lines = [f"- {f.fact_text} (similarity: {f.similarity:.2f})" for f in facts]
-                return f"Archival memory search results for '{query}':\n" + "\n".join(fact_lines)
+                rows = await recall_archival(user_id, query, limit=5)
+                if not rows:
+                    return f"No relevant archival memory found for query: '{query}'"
+                lines = [f"- {r['content']} (similarity: {float(r['sim']):.2f})" for r in rows]
+                return f"Archival memory search results for '{query}':\n" + "\n".join(lines)
+
+            elif tool_name == "retrieve_memory":
+                query = args.get("query", "")
+                mode = args.get("mode", "hybrid")
+                res = await retrieve_memory(user_id, query, mode=mode)
+                import json as _json
+                return _json.dumps(res)[:2000]
 
             elif tool_name == "query_historical_graph":
                 from datetime import datetime

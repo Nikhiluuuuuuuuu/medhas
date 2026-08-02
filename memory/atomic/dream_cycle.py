@@ -82,11 +82,13 @@ async def run_dream_cycle(user_id: str) -> Dict[str, Any]:
 
                     # 1. Layer 2: Update Letta Working Memory RAM blocks
                     if profile_summary:
-                        await update_block(user_id, "user_profile", profile_summary)
+                        await update_block(user_id, "user_profile", str(profile_summary))
                     if scratchpad:
-                        await update_block(user_id, "scratchpad", scratchpad)
+                        await update_block(user_id, "scratchpad", str(scratchpad))
                     if active_goals:
-                        await update_block(user_id, "active_goals", active_goals)
+                        # active_goals is a list per the prompt schema; blocks store strings
+                        goals_str = "\n".join(f"- {g}" for g in active_goals) if isinstance(active_goals, list) else str(active_goals)
+                        await update_block(user_id, "active_goals", goals_str)
 
                 except Exception as parse_err:
                     log_error(f"Dream cycle JSON parse fallback: {parse_err}")

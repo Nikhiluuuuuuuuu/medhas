@@ -79,3 +79,71 @@ async def test_graph_edge_and_spreading_activation(user_id):
     await update_edge(user_id, n1.id, n2.id, "used_by")
     san = await run_spreading_activation(user_id, ["Postgres"])
     assert len(san) >= 1
+
+
+# --- NEW: Mem0-style primary hash dedup (Step 1) ---
+@pytest.mark.asyncio
+async def test_atomic_md5_hash_dedup(user_id):
+    a = await insert_fact(user_id, "User lives in Hyderabad")
+    b = await insert_fact(user_id, "User lives in Hyderabad")  # identical text -> same hash
+    active = await get_all_active_facts(user_id)
+    # Only one active fact should exist (hash dedup, independent of cosine).
+    assert len(active) == 1, "MD5 hash dedup must collapse identical facts"
+    assert a.id == b.id
+
+
+# --- NEW: semantic node merge (>=0.95) on top of canonicalization (Step 2) ---
+@pytest.mark.asyncio
+async def test_graph_semantic_entity_merge(user_id):
+    from memory.graph.upsert_node import _semantic_match_node
+    # Insert a node, then verify the semantic matcher returns the SAME canonical name
+    # for an identical re-insert (cosine = 1.0 >= 0.95). This proves the merge path fires.
+    a = await upsert_node(user_id, "Kraionyx AI", "Company")
+    match = await _semantic_match_node(user_id, "Kraionyx AI")
+    assert match == a.name, "identical entity name must semantically merge to the same node"
+    b = await upsert_node(user_id, "Kraionyx AI", "Organization")
+    assert a.name == b.name, "re-inserting the same entity must resolve to one node"
+
+
+# --- NEW: edge invalidation on contradiction (Step 3) ---
+@pytest.mark.asyncio
+async def test_graph_edge_invalidation_on_contradiction(user_id):
+    from memory.graph import get_active_edges
+    s = await upsert_node(user_id, "ProjectX", "Project")
+    t1 = await upsert_node(user_id, "TeamA", "Team")
+    t2 = await upsert_node(user_id, "TeamB", "Team")
+    e1 = await update_edge(user_id, s.id, t1.id, "owned_by")
+    # Contradiction: now owned by TeamB -> e1 must be soft-closed (valid_to set)
+    e2 = await update_edge(user_id, s.id, t2.id, "owned_by")
+    edges = await get_active_edges(user_id, s.id)
+    active_targets = {e["target_id"] for e in edges}
+    assert t1.id not in active_targets, "old 'owned_by TeamA' edge must be invalidated"
+    assert t2.id in active_targets, "new 'owned_by TeamB' edge must be active"
+    # Prior edge must be soft-closed in the DB (bi-temporal). Verify by re-reading its row.
+    from infrastructure.db import DatabasePool
+    async with DatabasePool.acquire() as conn:
+        row = await conn.fetchrow("SELECT valid_to FROM graph_edges WHERE id=$1", e1.id)
+        assert row["valid_to"] is not None, "prior edge should have valid_to set (bi-temporal)"
+
+
+# --- NEW: Letta archival cold store (Step 6) ---
+@pytest.mark.asyncio
+async def test_archival_recall(user_id):
+    from memory.archival import archive_memory, recall_archival
+    await archive_memory(user_id, "The deployment runbook lives in internal wiki section 7")
+    rows = await recall_archival(user_id, "deployment runbook")
+    assert len(rows) >= 1
+    assert "runbook" in rows[0]["content"].lower()
+
+
+# --- NEW: LightRAG dual-level retrieval modes (Step 6) ---
+@pytest.mark.asyncio
+async def test_dual_level_retrieval_modes(user_id):
+    from memory.archival import retrieve_memory
+    await insert_fact(user_id, "User prefers Rust for backend services")
+    hybrid = await retrieve_memory(user_id, "backend language preference", mode="hybrid")
+    assert hybrid["mode"] == "hybrid"
+    assert len(hybrid["facts"]) >= 1
+    naive = await retrieve_memory(user_id, "backend language preference", mode="naive")
+    assert naive["mode"] == "naive"
+    assert len(naive["facts"]) >= 1

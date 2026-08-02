@@ -6,6 +6,7 @@ from memory.graph.canonicalize_node import resolve_canonical_node_name
 from memory.graph.spreading_activation import run_spreading_activation
 from memory.graph.belief_revision import update_bayesian_belief
 from memory.graph.export_graph import export_knowledge_graph
+from memory.graph.get_active_edges import get_active_edges
 
 __all__ = [
     "upsert_node",
@@ -15,5 +16,6 @@ __all__ = [
     "resolve_canonical_node_name",
     "run_spreading_activation",
     "update_bayesian_belief",
-    "export_knowledge_graph"
+    "export_knowledge_graph",
+    "get_active_edges"
 ]

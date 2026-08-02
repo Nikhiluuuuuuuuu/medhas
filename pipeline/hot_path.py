@@ -46,11 +46,27 @@ async def assemble_context_and_prompt(
     session_id: UUID,
     user_message: str
 ) -> Tuple[str, List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Execute parallel retrieval (<30ms) across Working RAM, Atomic Facts, SAN Graph, and Session Transcript."""
+    """Execute retrieval across Working RAM, Atomic Facts, SAN Graph, and Session Transcript.
+
+    Note: fact retrieval is boosted by the graph activation, so spreading activation is
+    computed first; system_prompt and transcript are still gathered in parallel with facts.
+    """
     async with measure_latency("pipeline.hot_path.assemble_context_and_prompt"):
-        # Parallel Execution across all memory layers
+        # 1. Seed terms + Spreading Activation (HippoRAG PPR over the entity graph)
+        seed_terms = extract_seed_terms(user_message)
+        activated_graph = await run_spreading_activation(user_id, seed_terms)
+        activated_entities = []
+        for g in activated_graph:
+            for key in ("source_name", "target_name"):
+                if g.get(key) and g[key] not in activated_entities:
+                    activated_entities.append(g[key])
+
+        # 2. Parallel retrieval across memory layers (facts boosted by activated entities)
         system_prompt_task = render_prompt(user_id)
-        facts_task = search_facts(user_id, user_message, limit=settings.TOP_K_FACTS, apply_rrf=True)
+        facts_task = search_facts(
+            user_id, user_message, limit=settings.TOP_K_FACTS,
+            apply_rrf=True, boost_entities=activated_entities or None
+        )
         transcript_task = get_transcript(session_id, limit=10)
 
         system_prompt, facts, transcript = await asyncio.gather(
@@ -58,12 +74,6 @@ async def assemble_context_and_prompt(
             facts_task,
             transcript_task
         )
-
-        # Extract seed terms for Neuroscience Spreading Activation Network (SAN)
-        seed_terms = extract_seed_terms(user_message)
-
-        # Run Spreading Activation
-        activated_graph = await run_spreading_activation(user_id, seed_terms)
 
         # Format retrieved context sections
         facts_section = ""

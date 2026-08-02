@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     name VARCHAR(255) NOT NULL,
     entity_type VARCHAR(100) NOT NULL, -- 'Person', 'Company', 'Location', 'Project', etc.
     attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
+    embedding vector(384) NULL,  -- node embedding for semantic entity merge (Graphiti-style)
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, name)
 );
@@ -83,3 +84,33 @@ CREATE TABLE IF NOT EXISTS graph_edges (
 
 CREATE INDEX IF NOT EXISTS idx_graph_edges_user_valid 
 ON graph_edges(user_id, valid_from, valid_to);
+
+-- 5b. EPISODES LAYER (Cognee/Graphiti): anchors for background extraction runs.
+-- Each conversation turn (or batched turns) becomes an episode that facts/edges derive from.
+CREATE TABLE IF NOT EXISTS episodes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id VARCHAR(255) NOT NULL,
+    session_id UUID NULL,
+    agent_id VARCHAR(255) NULL,
+    content TEXT NOT NULL,
+    source VARCHAR(50) NOT NULL DEFAULT 'message',  -- 'message' | 'document'
+    reference_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_episodes_user_time ON episodes(user_id, reference_time DESC);
+
+-- 6. ARCHIVAL MEMORY LAYER (Letta): cold store for off-context memories recalled on demand.
+CREATE TABLE IF NOT EXISTS archival_memory (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id VARCHAR(255) NOT NULL,
+    agent_id VARCHAR(255) NULL,
+    content TEXT NOT NULL,
+    embedding vector(384) NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_archival_user ON archival_memory(user_id);
+CREATE INDEX IF NOT EXISTS archival_memory_vector_idx
+ON archival_memory USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);

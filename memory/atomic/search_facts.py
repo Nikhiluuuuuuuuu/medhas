@@ -20,9 +20,15 @@ async def search_facts(
     similarity_threshold: float = settings.FACT_SIMILARITY_THRESHOLD,
     apply_rrf: bool = True,
     session_id: Optional[UUID] = None,
-    agent_id: Optional[str] = None
+    agent_id: Optional[str] = None,
+    boost_entities: Optional[List[str]] = None
 ) -> List[FactSearchResult]:
-    """Execute Mem0 Multi-Signal RRF (Reciprocal Rank Fusion) hybrid search across Dense Vector, BM25 Full-Text, and Recency Decay."""
+    """Execute Mem0 Multi-Signal RRF (Reciprocal Rank Fusion) hybrid search across Dense Vector, BM25 Full-Text, and Recency Decay.
+
+    boost_entities: list of activated graph entity names (HippoRAG PPR). Facts that mention
+    any boosted entity get a small relevance boost so the knowledge graph actually influences
+    what the agent recalls.
+    """
     async with measure_latency("memory.atomic.search_facts"):
         try:
             embedding = await embedder.embed_text(query_text)
@@ -114,6 +120,12 @@ async def search_facts(
                         else datetime.now(timezone.utc)
                     )
                     composite_score = rrf_val * importance_norm * retention
+
+                    # HippoRAG PPR boost: facts mentioning an activated graph entity rank higher
+                    if boost_entities:
+                        fact_lc = r["fact_text"].lower()
+                        if any(ent.lower() in fact_lc for ent in boost_entities):
+                            composite_score *= 1.25
 
                     # Include if vector similarity matches, FTS matches, or fuzzy typo-tolerant match succeeds
                     if sim >= 0.40 or float(r["fts_rank"]) > 0.1 or fuzzy_score > 0.5:

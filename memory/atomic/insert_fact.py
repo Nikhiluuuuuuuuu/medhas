@@ -1,33 +1,24 @@
-"""Layer 3 (Mem0): Insert atomic fact with strict deduplication & conflict resolution."""
+"""Layer 3 (Mem0): Insert atomic fact with Mem0-style dedup & LLM decision matrix."""
 
+import hashlib
 from typing import Optional
 from uuid import UUID
 from infrastructure.db import DatabasePool
-from infrastructure.llm import FastEmbeddingProvider
+from infrastructure.llm import FastEmbeddingProvider, GroqLLMProvider
 from memory.atomic.search_facts import search_facts
 from memory.atomic.deactivate_fact import deactivate_fact
+from memory.atomic.decision_matrix import decide_fact_action
 from schemas import AtomicFactSchema
+from config import settings
 from utils import measure_latency, log_atomic, log_error
 from core.exceptions import StorageOperationError
 
 embedder = FastEmbeddingProvider()
 
-async def evaluate_memory_decision_matrix(
-    incoming_fact: str,
-    existing_facts: list
-) -> dict:
-    """Mem0 LLM Memory Decision Matrix: Classifies incoming facts into ADD, UPDATE, DELETE, or NO_CHANGE actions."""
-    if not existing_facts:
-        return {"action": "ADD"}
 
-    for old_fact in existing_facts:
-        if old_fact.fact_text.lower().strip() == incoming_fact.lower().strip() or old_fact.similarity >= 0.90:
-            return {"action": "NO_CHANGE", "target_id": old_fact.id}
-        
-        if old_fact.similarity > 0.75 and not incoming_fact.startswith("[Reflection]"):
-            return {"action": "UPDATE", "target_id": old_fact.id}
+def _content_hash(text: str) -> str:
+    return hashlib.md5(text.strip().lower().encode("utf-8")).hexdigest()
 
-    return {"action": "ADD"}
 
 async def insert_fact(
     user_id: str,
@@ -36,61 +27,106 @@ async def insert_fact(
     session_id: Optional[UUID] = None,
     agent_id: Optional[str] = None
 ) -> AtomicFactSchema:
-    """Insert fact into atomic_facts with Mem0 decision matrix and ground-truth preservation across multi-scopes."""
+    """Insert fact into atomic_facts with Mem0-style primary hash dedup + LLM decision matrix.
+
+    Pipeline (mirrors Mem0's V3 batch pipeline, main.py:891-1177):
+      1. MD5 hash dedup — if an ACTIVE fact with the same hash exists, treat as NO_CHANGE.
+      2. Retrieve top semantically-similar candidates (vector + BM25).
+      3. LLM decision matrix classifies ADD / UPDATE / DELETE / NO_CHANGE (with cosine guardrails).
+      4. On UPDATE/DELETE, soft-deactivate the prior fact; insert the new fact.
+    """
+    fact_text = fact_text.strip()
+    if not fact_text:
+        raise StorageOperationError("Cannot insert empty fact")
+
     async with measure_latency("memory.atomic.insert_fact"):
         try:
-            # 1. Deduplication & decision matrix check
-            existing_similar = await search_facts(user_id, fact_text, limit=3, similarity_threshold=0.65, session_id=session_id, agent_id=agent_id)
-            decision = await evaluate_memory_decision_matrix(fact_text, existing_similar)
+            content_hash = _content_hash(fact_text)
 
-            if decision["action"] == "NO_CHANGE":
-                log_atomic(f"Mem0 Matrix: NO_CHANGE for fact: [bold white]'{fact_text}'[/bold white]")
-                target = next((f for f in existing_similar if f.id == decision.get("target_id")), existing_similar[0])
-                return AtomicFactSchema(
-                    id=target.id,
-                    user_id=user_id,
-                    session_id=target.session_id,
-                    agent_id=target.agent_id,
-                    fact_text=target.fact_text,
-                    is_active=True,
-                    created_at=target.created_at
+            async with DatabasePool.acquire() as conn:
+                # 1. PRIMARY DEDUP: exact content hash (Mem0 main.py:991 md5 dedup)
+                if settings.FACT_HASH_DEDUP:
+                    existing_hash = await conn.fetchrow(
+                        """
+                        SELECT id, fact_text, session_id, agent_id, created_at
+                        FROM atomic_facts
+                        WHERE user_id = $1 AND is_active = TRUE AND content_hash = $2
+                        LIMIT 1;
+                        """,
+                        user_id, content_hash,
+                    )
+                    if existing_hash:
+                        log_atomic(f"Mem0 hash dedup: NO_CHANGE for fact: '{fact_text}'")
+                        return AtomicFactSchema(
+                            id=existing_hash["id"],
+                            user_id=user_id,
+                            session_id=existing_hash["session_id"],
+                            agent_id=existing_hash["agent_id"],
+                            fact_text=existing_hash["fact_text"],
+                            is_active=True,
+                            created_at=existing_hash["created_at"],
+                        )
+
+                # 2. Retrieve candidates for the decision matrix
+                candidates = await search_facts(
+                    user_id, fact_text, limit=5,
+                    similarity_threshold=settings.FACT_SEMANTIC_UPDATE_THRESHOLD - 0.1,
+                    session_id=session_id, agent_id=agent_id,
                 )
 
-            elif decision["action"] == "UPDATE" or decision["action"] == "DELETE":
-                target_id = decision.get("target_id")
-                if target_id:
-                    log_atomic(f"Mem0 Matrix: Deactivating conflicting fact {target_id}")
-                    await deactivate_fact(target_id)
+                # 3. LLM decision matrix (falls back to ADD if LLM unavailable)
+                decision = await decide_fact_action(fact_text, candidates, llm=GroqLLMProvider())
 
-            # 2. Embed new fact
+                action = decision.get("action", "ADD")
+                target_id = decision.get("target_id")
+
+                # Cosine guardrails: if a candidate is near-identical, force NO_CHANGE/UPDATE
+                near_dup = next(
+                    (c for c in candidates if float(c.similarity) >= settings.FACT_SEMANTIC_DUP_THRESHOLD),
+                    None,
+                )
+                if near_dup and action == "ADD":
+                    action = "NO_CHANGE"
+                    target_id = near_dup.id
+
+                if action in ("NO_CHANGE",):
+                    log_atomic(f"Mem0 Matrix: NO_CHANGE for fact: '{fact_text}'")
+                    target = next((c for c in candidates if c.id == target_id), candidates[0]) if candidates else None
+                    if target is None:
+                        # Hash miss but cosine near-dup with no retrievable target: still insert to be safe.
+                        action = "ADD"
+                    else:
+                        return AtomicFactSchema(
+                            id=target.id, user_id=user_id,
+                            session_id=target.session_id, agent_id=target.agent_id,
+                            fact_text=target.fact_text, is_active=True, created_at=target.created_at,
+                        )
+
+                if action in ("UPDATE", "DELETE"):
+                    if target_id:
+                        log_atomic(f"Mem0 Matrix: Deactivating conflicting fact {target_id} ({action})")
+                        await deactivate_fact(target_id)
+
+            # 4. Embed + store new fact
             embedding = await embedder.embed_text(fact_text)
             vector_str = f"[{','.join(str(x) for x in embedding)}]"
 
-            # 3. Store in Postgres
             async with DatabasePool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO atomic_facts (user_id, session_id, agent_id, fact_text, embedding, is_active)
-                    VALUES ($1, $2, $3, $4, $5::vector, TRUE)
+                    INSERT INTO atomic_facts (user_id, session_id, agent_id, fact_text, embedding, is_active, content_hash)
+                    VALUES ($1, $2, $3, $4, $5::vector, TRUE, $6)
                     RETURNING id, user_id, session_id, agent_id, fact_text, is_active, created_at;
                     """,
-                    user_id,
-                    session_id,
-                    agent_id,
-                    fact_text,
-                    vector_str
+                    user_id, session_id, agent_id, fact_text, vector_str, content_hash
                 )
                 assert row is not None, "Failed to insert atomic fact"
                 fact = AtomicFactSchema(
-                    id=row["id"],
-                    user_id=row["user_id"],
-                    session_id=row["session_id"],
-                    agent_id=row["agent_id"],
-                    fact_text=row["fact_text"],
-                    is_active=row["is_active"],
-                    created_at=row["created_at"]
+                    id=row["id"], user_id=row["user_id"], session_id=row["session_id"],
+                    agent_id=row["agent_id"], fact_text=row["fact_text"],
+                    is_active=row["is_active"], created_at=row["created_at"]
                 )
-                log_atomic(f"Inserted new active fact: [bold white]'{fact_text}'[/bold white]")
+                log_atomic(f"Inserted new active fact: '{fact_text}'")
                 return fact
         except Exception as e:
             log_error(f"Failed to insert fact: {e}")

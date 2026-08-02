@@ -22,12 +22,17 @@ async def update_edge(
     async with measure_latency(f"memory.graph.update_edge ({relationship})"):
         try:
             async with DatabasePool.acquire() as conn:
-                # 1. Invalidate any existing active edges between source and target or for the same relationship type
+                # 1. Invalidate the prior active edge that this new edge contradicts:
+                # same subject (source) + same relationship, but a DIFFERENT target. This is the
+                # Graphiti bi-temporal pattern — the old claim is soft-closed (valid_to set),
+                # preserving point-in-time history, while multi-valued relationships to other
+                # targets are left intact.
                 await conn.execute(
                     """
                     UPDATE graph_edges
                     SET valid_to = $4, expired_at = CURRENT_TIMESTAMP
-                    WHERE user_id = $1 AND source_id = $2 AND (target_id = $3 OR relationship = $5) AND valid_to IS NULL;
+                    WHERE user_id = $1 AND source_id = $2 AND relationship = $5
+                      AND target_id <> $3 AND valid_to IS NULL;
                     """,
                     user_id,
                     source_id,
