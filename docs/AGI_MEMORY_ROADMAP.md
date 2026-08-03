@@ -7,7 +7,9 @@
 >
 > **Status anchor:** 2026-08-03. All 12 alignment gaps RESOLVED (24 tests pass on `main`,
 > live Groq key, no mock data). This document lists **enhancements only**, now grounded in
-> cognitive-science and 2024–2026 AGI-memory research (sources cited inline).
+> cognitive-science and 2024–2026 AGI-memory research (sources cited inline). **36+ enhancements,
+> including the missing memory types (prospective, affective, implicit, meta, sensory) and missing
+> processes (admission control, interference/forgetting, security/unlearning) found in review.**
 >
 > **Design spine — CoALA (Cognitive Architectures for Language Agents, Princeton 2023,
 > arxiv 2309.02427):** human-like agent memory needs four types —
@@ -30,10 +32,33 @@
 | [6] | TOKI: Bitemporal Operator Algebra for Contradiction Resolution (2026, 2606.06240) | created/valid/invalid temporal lattice, contradiction operators |
 | [7] | Zep / Graphiti + LongMemEval (2025) | bi-temporal KG; 71% temporal recall vs Mem0 49% |
 | [8] | Human memory: reconsolidation (PMC3069643), spacing/testing effect, Ebbinghaus forgetting curve | decay + spaced reinforcement |
+| [9] | PM-Bench: Prospective Memory in LLM Agents (2607.12385) | future-intent memory E27 |
+| [10] | Emotions in AI / affect in episodic memory (2505.01462; DND-16.7) | affective/flashbulb E28 |
+| [11] | Implicit memory in LLM agents (2602.08563) | implicit-memory awareness E30 |
+| [12] | Adaptive Memory Admission Control (2603.04549) | write-gate E32 |
+| [13] | Survey: Security of LTM in LLM Agents / mnemonic sovereignty (2604.16548); MemMorph (2605.26154) | poisoning/unlearning E34 |
+| [14] | Cost & Accuracy of LTM in Multi-Agent (2601.07978) — flat RAG/Mem0 77–81% vs Graphiti/cognee 55–56% | store-choice correction E37 |
+| [15] | Catastrophic forgetting (PNAS 1611835114; Nature 07711-7); replay (par.nsf.gov 10350729) | interference/rehearsal E33/E36 |
+| [16] | Memory for Autonomous LLM Agents (2603.07670) — Baddeley mapping | working-memory eviction E35 |
 
 ---
 
-## Phase 1 — Human memory taxonomy made faithful (the "what kind of memory" stage)
+## 0. Corrected memory taxonomy — what the first draft missed
+
+CoALA's 4 types (in-context / episodic / semantic / procedural) are necessary but **not sufficient** for a brain-like system. Research + the 2026 agent-memory literature show **6 more types** that Medhas currently has *zero* support for. These are added as enhancements E27–E31 below and as first-class `MemoryType` values.
+
+| Type | Human analogue | Why it's needed | Medhas today |
+|------|----------------|-----------------|--------------|
+| **Prospective** | "remember to do X when Y happens" | agents must carry future intentions through activity (PM-Bench 2026, 2607.12385) | ❌ none (no future-intent store) |
+| **Affective / emotional** | flashbulb memories; emotional weighting | high-arousal events get flatter decay + priority recall (2505.01462; DND-16.7) | ❌ none (no affect tag) |
+| **Implicit** | skills/state encoded without explicit store | LLM state leaks through outputs even w/o memory module (2602.08563) | ❌ unmodelled |
+| **Meta-memory** | "knowing what I know / don't know" | distinct from metacognition (control); enables calibration + abstention | ⚠️ conflated w/ metacognition |
+| **Sensory / perceptual buffer** | iconic/echoic pre-attentive stage | first stage before working memory; multimodal raw percept | ⚠️ only final text stored |
+| **Semantic (procedural) split** | habits vs facts | already in CoALA; listed for completeness | ✅ partial |
+
+**Processes the first draft missed** (added as E32–E37): admission control (what's *worth* storing), interference / retrieval-induced & catastrophic forgetting (stability–plasticity), memory **security / poisoning / unlearning** ("mnemonic sovereignty", survey 2604.16548), and **working-memory eviction** (Baddeley central executive).
+
+
 
 ### E1. Formalize the 4 CoALA memory types as first-class stores
 - **Inspired by:** [1] CoALA; [2] Generative Agents memory stream.
@@ -209,6 +234,106 @@
 
 ---
 
+## Phase 7b — Missing memory types (the gaps from the first draft)
+
+### E27. Prospective memory (future intentions / reminders)
+- **Inspired by:** PM-Bench 2026 (2607.12385) — carry a future intention through activity, fire only on cue/time.
+- **Current state:** no future-intent store; reminders impossible.
+- **What to build:** `prospective_memory` (cue/time, intent, done flag); a lightweight scheduler checks cues each turn and injects the intention into working memory when triggered. Distinct from episodic (past) memory.
+- **Where:** `memory/prospective.py`, `pipeline/agent_graph.py` (cue check per turn).
+- **Acceptance:** "remind me to X when Y" fires exactly when Y occurs; doesn't fire otherwise.
+
+### E28. Affective / emotional memory (flashbulb weighting)
+- **Inspired by:** [2505.01462] affect interwoven with episodic memory; DND-16.7 emotional arousal → flatter decay.
+- **Current state:** no affect dimension; all facts decay equally.
+- **What to build:** `affect` tag (valence/arousal) on facts/episodes; high-arousal → flatter decay curve + priority in retrieval (flashbulb effect). Enables "this mattered."
+- **Where:** `schema.py`, `search_facts` decay + ranking, `async_extractor` (detect affect).
+- **Acceptance:** high-arousal fact persists longer + ranks higher; low-arousal decays normally.
+
+### E29. Meta-memory (knowing what you know)
+- **Inspired by:** human meta-memory; distinct from metacognition (control). Clarifies E16/E18.
+- **Current state:** metacognition and meta-memory conflated.
+- **What to build:** a `meta` record per user: coverage stats (how many topics known, confidence per topic), "known unknowns" list. Powers honest "I don't know" and targeted learning.
+- **Where:** `memory/metamemory.py`, `retrieve_memory`.
+- **Acceptance:** agent reports calibrated coverage; abstains on unknown topics.
+
+### E30. Implicit-memory awareness (state leakage)
+- **Inspired by:** [2602.08563] implicit memory — LLM encodes state in outputs; re-ingested outputs become "memory."
+- **Current state:** unmodelled; extracted "facts" may actually be the model's own prior leaking.
+- **What to build:** tag memories `explicit` vs `implicit-inferred`; down-weight implicitly-inferred items in belief; allow audit of which facts came from user vs model inference.
+- **Where:** `insert_fact` (source provenance), `FactSearchResult`.
+- **Acceptance:** inferred-vs-stated provenance is queryable.
+
+### E31. Sensory / perceptual buffer (pre-attentive raw percept)
+- **Inspired by:** iconic/echoic buffer; first stage before working memory.
+- **Current state:** only final structured text stored; raw percept lost.
+- **What to build:** short-lived `percept_buffer` (multimodal embedding + raw caption, TTL seconds) feeding encoding; enables "what did I just see" within a turn.
+- **Where:** `memory/perceptual.py`, `pipeline/async_extractor.py`.
+- **Acceptance:** within-turn raw percept retrievable; auto-expires.
+
+---
+
+## Phase 7c — Missing processes (admission, interference, security, working-memory)
+
+### E32. Adaptive admission control (what's WORTH storing)
+- **Inspired by:** Adaptive Memory Admission Control (2603.04549) — gate at write, not only decay at read.
+- **Current state:** everything extracted is stored; no write-time gating.
+- **What to build:** a scoring gate (novelty × importance × credibility × capacity headroom) decides store / merge / drop. Prevents memory bloat at the source.
+- **Where:** `pipeline/async_extractor.py`, `memory/atomic/insert_fact.py`.
+- **Acceptance:** low-value duplicate/tautology is dropped at write; important novel fact stored.
+
+### E33. Interference & forgetting mitigation (stability–plasticity)
+- **Inspired by:** catastrophic forgetting (PNAS 1611835114; Nature 07711-7); retrieval-induced forgetting.
+- **Current state:** decay exists (E13) but **no protection against new learning overwriting old**, no rehearsal buffer.
+- **What to build:** (a) protected "core" memories (high belief) are frozen from decay/overwrite; (b) rehearsal buffer replays protected memories during consolidation (stability); (c) detect interference when a new fact would contradict a core memory and route to E10/E11 instead of silent overwrite.
+- **Where:** `consolidation_scheduler.py`, `insert_fact`, `schema.py`.
+- **Acceptance:** learning new info doesn't erase a protected core fact; contradiction surfaces.
+
+### E34. Memory security — poisoning defense + mnemonic sovereignty
+- **Inspired by:** Survey on Security of LTM in LLM Agents (2604.16548, "mnemonic sovereignty"); MemMorph tool-hijacking (2605.26154); DSRM deceptive reasoning.
+- **Current state:** **open API (E22) + no poisoning defense + no unlearning.** A malicious turn could inject false facts that later steer the agent.
+- **What to build:**
+  - **Integrity:** sign/attest memory writes; provenance + source trust score per fact; flag memories from untrusted sources.
+  - **Poison detection:** contrastive check — does a new fact contradict high-belief core memory from a *different* trusted source? If yes, quarantine (don't auto-merge).
+  - **Unlearning / right-to-be-forgotten:** `forget(user_id, scope)` that cryptographically purges + re-derives dependent reflections; satisfies GDPR-style erasure.
+  - **Sandboxing:** memory used for reasoning is separated from memory used for tool calls (prevents MemMorph tool hijack via recalled memory).
+- **Where:** `infrastructure/security.py`, `insert_fact`, `memory/atomic/memory_crud.py` (forget), `retrieve_memory` (trust gating).
+- **Acceptance:** injected false fact is quarantined, not merged; `forget` fully purges + dependent reflections; tool-call memory isolated from reasoning memory.
+
+### E35. Working-memory eviction policy (Baddeley central executive)
+- **Inspired by:** Baddeley model; "Memory for Autonomous LLM Agents" (2603.07670) — LLM=executive, context window=buffer, capacity-limited.
+- **Current state:** working blocks are static; no capacity management of the live context window.
+- **What to build:** an eviction policy for the active context — keep high-relevance/recent/important, evict low-value, summarise overflow into working blocks. Mirrors the central executive's selectivity.
+- **Where:** `memory/working.py`, `pipeline/agent_graph.py`.
+- **Acceptance:** overflow turn keeps the most relevant items; nothing critical dropped silently.
+
+### E36. Continual-learning rehearsal buffer (anti-catastrophic-forgetting at scale)
+- **Inspired by:** replay methods (par.nsf.gov 10350729); synaptic consolidation analogy.
+- **Current state:** no rehearsal of old memories during new learning.
+- **What to build:** a bounded rehearsal buffer sampled during consolidation (E7) so old knowledge is periodically reactivated — the agent equivalent of synaptic consolidation.
+- **Where:** `consolidation_scheduler.py`.
+- **Acceptance:** periodic reactivation of old memories prevents silent loss.
+
+### E37. Process → mechanism decision matrix (choose the BEST one per process)
+This answers "for each process, pick the best mechanism" — comparative, not just a list.
+
+| Process | Candidate mechanisms | **Chosen (best-fit)** | Why (evidence) |
+|---------|----------------------|------------------------|----------------|
+| **Associative / multi-hop retrieval** | dense-only, sparse/BM25, graph+PPR | **Graph + PPR (HippoRAG 2)** + cheap recognition pre-filter | flat RAG misses associations; PPR over KG beats dense on multi-hop; recognition filter cuts cost [3] |
+| **Recall of a specific past fact** | vector kNN, FTS/BM25, exact-md5 | **Hybrid: md5/exact → FTS → vector** | exact is cheapest/perfect when available; BM25 for lexical; vector for paraphrase |
+| **Temporal "what was true at T"** | versioned rows, bitemporal lattice | **Bitemporal lattice (TOKI/Zep)** | resolves contradictions + valid-time queries; Zep 71% vs Mem0 49% on LongMemEval [6][7] |
+| **Fact dedup** | exact hash, semantic cluster, LLM judge | **Hash (fast) → semantic merge (0.95) → LLM only on conflict** | hash is O(1); semantic catches paraphrases; LLM only when needed (cost) |
+| **Long-term store** | flat RAG, graph (Graphiti/cognee), full-context | **Hybrid: flat facts (77–81% acc) + graph for relations** | 2601.07978: Mem0/RAG/full-context 77–81% vs Graphiti/cognee 55–56% on accuracy → keep flat store primary, graph as enrichment, not sole source |
+| **Belief update** | overwrite, avg, Bayesian odds-form | **Bayesian odds-form (incremental)** | compounding posterior; existing `belief_revision.py` proves it [7] |
+| **Forgetting** | TTL delete, Ebbinghaus decay, SCM algorithmic | **Decay (Ebbinghaus) + admission gating + protected core** | SCM shows deliberate forgetting beats pure TTL; gate at write (E32) prevents bloat [5][8] |
+| **Consolidation trigger** | manual, scheduled sleep, event-driven | **Scheduled sleep (SCM) + event-driven on contradiction** | sleep replay is brain-faithful; event-driven catches urgent conflicts [5] |
+| **Memory write gate** | store-all, LLM-judge, scored admission | **Scored admission (novelty×importance×credibility)** | 2603.04549 shows admission control cuts bloat without losing signal |
+| **Security** | none, trust-score, signed+quarantine | **Signed writes + source trust + quarantine + unlearn** | 2604.16548: security can't be retrofitted at retrieve time; mnemonic sovereignty needs write-time integrity |
+
+> **Key correction from research:** the 2026 accuracy study (2601.07978) shows **graph-only memory (Graphiti/cognee) underperforms flat RAG/Mem0 (55–56% vs 77–81%)**. So Medhas must keep its **flat atomic-fact store as the primary recall path** and use the **graph as a relational enrichment layer**, not the sole source. The roadmap's Phase 2/4 graph work is reframed as *enrichment*, not replacement.
+
+---
+
 ## Phase 8 — Production Hardening (the "deployable" stage)
 
 ### E22. AuthN/AuthZ + tenant isolation
@@ -269,14 +394,16 @@
 
 ## "Done" criteria — a memory system that works like a human brain
 
-- [ ] **Encode:** text + docs + multimodal, chunked, with cross-chunk resolution and a cheap recognition pre-filter.
-- [ ] **Store:** explicit episodic / semantic / procedural / in-context types, each a first-class store.
-- [ ] **Consolidate:** automatic sleep-time replay (reflect → contradict → strengthen → compress → prune) + A-MEM evolution on integration.
-- [ ] **Believe:** bitemporal contradiction lattice + Bayesian belief on facts; retrieval surfaces provenance + calibrated uncertainty.
-- [ ] **Forget:** algorithmic forgetting with spaced reinforcement; important memories protected; recall triggers reconsolidation.
-- [ ] **Retrieve:** metacognitively routed per intent; recognition + PPR; temporal/causal queries.
-- [ ] **Persist:** cross-session user continuity + lifetime narrative.
-- [ ] **Measure:** Recall@K, faithfulness, temporal accuracy on a golden set (LongMemEval-style).
-- [ ] **Deploy:** authenticated, tenant-isolated, rate-limited, observable, backed-up, horizontally scalable, survives provider outages.
+- [ ] **Encode:** text + docs + multimodal, chunked, cross-chunk resolution, cheap recognition pre-filter, **prospective + affective + sensory buffers** present.
+- [ ] **Store:** episodic / semantic / procedural / in-context **+ prospective / affective / implicit / meta / sensory** as first-class types.
+- [ ] **Admit:** scored write-gate (novelty×importance×credibility) prevents bloat at source.
+- [ ] **Consolidate:** automatic sleep-time replay (reflect → contradict → strengthen → compress → prune) + A-MEM evolution + **rehearsal buffer** (anti-catastrophic-forgetting).
+- [ ] **Believe:** bitemporal contradiction lattice + Bayesian belief; retrieval surfaces provenance + calibrated uncertainty + **source trust**.
+- [ ] **Forget:** algorithmic forgetting + spaced reinforcement; protected core resists decay/overwrite (stability–plasticity).
+- [ ] **Retrieve:** metacognitively routed per intent; recognition + PPR; temporal/causal queries; **working-memory eviction** under capacity.
+- [ ] **Persist:** cross-session user continuity + lifetime narrative; **prospective intentions fire on cue**.
+- [ ] **Secure:** authenticated, tenant-isolated, poisoning-quarantined, **unlearn/right-to-be-forgotten**, tool-call memory sandboxed.
+- [ ] **Measure:** Recall@K, faithfulness, temporal accuracy, prospective-fire accuracy on golden sets.
+- [ ] **Deploy:** rate-limited, observable, backed-up, horizontally scalable, survives provider outages.
 
-*Single source of truth for AGI-memory enhancements. Alignment gaps (Mem0/Cognee/Letta/Graphiti/HippoRAG/LightRAG) are tracked in `ARCHITECTURE_REFERENCE.md` and are all RESOLVED.*
+*37 enhancements (E1–E37). Single source of truth for AGI-memory enhancements. Alignment gaps are in `ARCHITECTURE_REFERENCE.md` (all RESOLVED).*
