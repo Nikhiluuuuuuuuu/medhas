@@ -14,12 +14,13 @@ from config import settings
 from utils import measure_latency, log_atomic, log_error
 from core.exceptions import StorageOperationError
 from memory.atomic.json_utils import _coerce_json
+from memory.atomic.hashing import content_hash
 
 embedder = FastEmbeddingProvider()
 
 
 def _content_hash(text: str) -> str:
-    return hashlib.md5(text.strip().lower().encode("utf-8")).hexdigest()
+    return content_hash(text)
 
 
 async def insert_fact(

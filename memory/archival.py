@@ -104,11 +104,14 @@ async def retrieve_memory(
         # LightRAG `mix`: fuse local facts + global concepts + community-level synthesis.
         from memory.graph import community_search
         communities = await community_search(user_id, query, limit=limit)
+        # Letta archival cold tier: recall relevant off-context memories on demand.
+        archival = await recall_archival(user_id, query, limit=limit)
         return {
             "mode": "mix",
             "facts": low,
-            "high_level": {**high, "communities": communities},
+            "high_level": {**high, "communities": communities, "archival": archival},
         }
 
     # hybrid
-    return {"mode": "hybrid", "facts": low, "high_level": high}
+    archival = await recall_archival(user_id, query, limit=limit)
+    return {"mode": "hybrid", "facts": low, "high_level": {**high, "archival": archival}}

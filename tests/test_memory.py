@@ -326,3 +326,78 @@ async def test_gbrain_capture_and_dream(user_id):
     assert "reflections" in report and "patterns" in report
     assert "embed_refreshed" in report and "orphans_detected" in report
 
+
+# --- NEW (Gap 3: Graphiti episode resolution layer) ---
+@pytest.mark.asyncio
+async def test_episodes_resolution_layer(user_id):
+    from memory.episodes import add_episode, get_episode, get_episodes, EpisodeType
+    ep_id = await add_episode(
+        user_id, name="onboarding", episode_body="User said they prefer PostgreSQL.",
+        source_description="chat message", reference_time=None, source=EpisodeType.message,
+    )
+    got = await get_episode(ep_id)
+    assert got is not None and got["source"] == "message"
+    assert got["source_description"] == "chat message"
+    listed = await get_episodes(user_id, limit=5)
+    assert any(e["id"] == ep_id for e in listed)
+
+
+# --- NEW (Gap 1: extractor within-batch entity/fact dedup) ---
+@pytest.mark.asyncio
+async def test_extractor_within_batch_dedup(user_id):
+    from pipeline.async_extractor import extract_and_persist_background
+    payload = {
+        "facts": [
+            "TechCorp builds KareOS",
+            "TechCorp builds KareOS",
+            "Kraionyx founded in 2025",
+        ],
+        "edges": [
+            {"source": "TechCorp", "target": "KareOS", "relationship": "builds"},
+            {"source": "TechCorp", "target": "KareOS", "relationship": "builds"},
+        ],
+    }
+    import json
+    from pipeline import async_extractor
+    async def fake_chat(messages, temperature=0.0):
+        return {"content": "```json\n" + json.dumps(payload) + "\n```"}
+    async_extractor.extractor_llm.chat_completion = fake_chat
+
+    await extract_and_persist_background(user_id, "User uses TechCorp tools", "KareOS is built by TechCorp")
+    from memory.atomic import get_all_active_facts
+    from infrastructure.db import DatabasePool
+    from memory.atomic import memory_crud
+    facts = await get_all_active_facts(user_id)
+    kr_facts = [f for f in facts if "KareOS" in f["fact_text"] or "TechCorp" in f["fact_text"]]
+    assert len(kr_facts) == 1, f"expected 1 deduped fact, got {len(kr_facts)}: {[f['fact_text'] for f in kr_facts]}"
+    async with DatabasePool.acquire() as conn:
+        edge_cnt = await conn.fetchval(
+            "SELECT count(*) FROM graph_edges WHERE user_id=$1 AND source_id IN "
+            "(SELECT id FROM graph_nodes WHERE name='TechCorp') AND target_id IN "
+            "(SELECT id FROM graph_nodes WHERE name='KareOS') AND relationship='builds' AND valid_to IS NULL",
+            user_id,
+        )
+    assert edge_cnt == 1, f"expected 1 deduped edge, got {edge_cnt}"
+    await memory_crud.reset_user(user_id)
+
+
+# --- NEW (Gap 2: archival cold tier + conversation recall wired) ---
+@pytest.mark.asyncio
+async def test_archival_and_recall_tiers(user_id):
+    from memory.archival import archive_memory, recall_archival, retrieve_memory
+    from memory.session.recall import recall_conversation
+    from uuid import uuid4
+    from memory.session import get_transcript
+    aid = await archive_memory(user_id, "Cold fact: user migrated off AWS to local infra")
+    recalled = await recall_archival(user_id, "local infra migration", limit=3)
+    assert any(r["id"] == aid for r in recalled), "archival recall should return the archived memory"
+    mix = await retrieve_memory(user_id, "local infra", mode="mix")
+    assert "archival" in mix["high_level"]
+    sid = uuid4()
+    await get_transcript(sid)
+    conv = await recall_conversation(sid, query="anything", limit=3)
+    assert isinstance(conv, list)
+
+
+
+

@@ -17,6 +17,7 @@ from uuid import UUID
 import memory.atomic as atomic_mem
 import memory.graph as graph_mem
 import memory.session as session_mem
+from memory.atomic.hashing import content_hash
 from infrastructure.llm import GroqLLMProvider
 from utils import measure_latency, log_atomic, log_graph, log_error
 from pipeline.prompts import EXTRACTION_PROMPT, CONTEXT_TEMPLATE
@@ -79,17 +80,32 @@ async def extract_and_persist_background(
             data = json.loads(raw_content)
 
             # 2. Persist facts (Mem0: hash dedup + LLM decision matrix inside insert_fact)
+            # Mem0 main.py:985 — within-batch hash dedup so the same fact text extracted
+            # twice in one LLM response is only stored once (not just across calls).
             facts: List[str] = data.get("facts", [])
+            seen_hashes = set()
             for fact_text in facts:
+                fact_hash = content_hash(fact_text)
+                if fact_hash in seen_hashes:
+                    continue
+                seen_hashes.add(fact_hash)
                 await atomic_mem.insert_fact(user_id, fact_text, session_id=session_id, agent_id=agent_id)
 
             # 3. Persist bi-temporal graph edges (Graphiti: canonicalization + semantic merge)
+            # Cognee deduplicate_nodes_and_edges.py — within-batch edge dedup keyed by
+            # (source, target, relationship) so identical edges in one batch merge once.
             edges: List[Dict[str, Any]] = data.get("edges", [])
+            seen_edge_keys = set()
             for edge_info in edges:
                 src_name = edge_info.get("source")
                 tgt_name = edge_info.get("target")
                 if not src_name or not tgt_name:
                     continue
+                rel = edge_info.get("relationship", "associated_with")
+                edge_key = (src_name, tgt_name, rel)
+                if edge_key in seen_edge_keys:
+                    continue
+                seen_edge_keys.add(edge_key)
 
                 src_node = await graph_mem.upsert_node(
                     user_id, name=src_name, entity_type=edge_info.get("source_type", "Person"),
@@ -114,7 +130,7 @@ async def extract_and_persist_background(
 
                 await graph_mem.update_edge(
                     user_id=user_id, source_id=src_node.id, target_id=tgt_node.id,
-                    relationship=edge_info.get("relationship", "associated_with"),
+                    relationship=rel,
                     valid_from=valid_from, session_id=session_id, agent_id=agent_id,
                 )
 

@@ -73,15 +73,17 @@ filters (eq/ne/in/AND/OR/NOT). `mem0/memory/setup.py` builds the graph store.
 - Retrieval is **hybrid**: vector + BM25 + graph traversal, per `SearchType`.
 - Graph nodes are **deduped/merged** during build (entity resolution).
 
-### Medhas status — **PARTIAL**
-- `pipeline/async_extractor.py` extracts facts + edges in one LLM call. It does
-  **not** yet do chunking, BM25 storage, or entity-resolution merge — so it is
-  "Cognee-inspired" rather than a full pipeline.
-- The atomic layer now has a `tsvector`-ready structure; a BM25 column on
-  `atomic_facts` is the outstanding item (the RRF path uses vector + recency, not
-  true BM25 text ranking yet).
-- **Gap to close**: wire `canonicalize_node` (already fixed for space-insensitivity)
-  into the extractor so extracted entities merge rather than duplicate.
+### Medhas status — **RESOLVED**
+- `pipeline/async_extractor.py` extracts facts + edges in one LLM call with
+  **within-batch fact hash dedup** (Mem0 `seen_hashes`) and **edge dedup** keyed by
+  `(source, target, relationship)` (Cognee `deduplicate_nodes_and_edges`). Extracted
+  entities flow through `upsert_node` (space-insensitive canonicalization + 0.95
+  semantic merge) and `update_edge` (identity dedup), so no duplicate nodes/edges form.
+- The atomic layer uses a **real Postgres `ts_rank_cd` BM25/FTS score** (OR-joined query
+  terms) wired into the fusion reranker as a first-class signal — genuine Cognee/Mem0
+  hybrid (vector + BM25 + recency + importance), not just vector + recency.
+- Entity resolution via `canonicalize_node` is wired into the extractor (space-insensitive
+  + semantic merge), so extracted entities merge rather than duplicate.
 
 ---
 
@@ -181,10 +183,10 @@ filters (eq/ne/in/AND/OR/NOT). `mem0/memory/setup.py` builds the graph store.
 | 6 | Dual-level + mix retrieval modes | LightRAG | ✅ resolved |
 | 7 | PPR-style (spreading activation) in retrieval | HippoRAG | ✅ resolved |
 | 8 | Working-block `read_only` enforcement + custom blocks | Letta/MemGPT | ✅ resolved |
-| 9 | No BM25 text column on `atomic_facts` | Cognee | ⚠️ open |
-| 10 | Extractor lacks chunk/entity-merge pipeline | Cognee | ⚠️ open |
-| 11 | No archival/recall cold-tier | Letta/MemGPT | ⚠️ open (non-blocking) |
-| 12 | No `episodes` anchor table | Graphiti | ⚠️ open (non-blocking) |
+| 9 | BM25 text column on `atomic_facts` | Cognee | ✅ resolved (real ts_rank_cd FTS wired into fusion rerank) |
+| 10 | Extractor lacks chunk/entity-merge pipeline | Cognee | ✅ resolved (within-batch fact hash dedup + edge dedup; upsert canonicalizes/merges) |
+| 11 | No archival/recall cold-tier | Letta/MemGPT | ✅ resolved (archival store + recall wired into hybrid/mix; conversation recall tier) |
+| 12 | No `episodes` anchor table | Graphiti | ✅ resolved (episodes table + add_episode/get_episode/get_episodes resolution API) |
 
 ---
 
@@ -196,9 +198,9 @@ UnifiedMemoryEngine.execute_turn(user_msg)
    ├─ L2 Working: render blocks (persona/profile/goals/scratchpad + CUSTOM), read_only enforced
    ├─ L3 Atomic (Mem0): md5 dedup → LLM decision matrix → vector+BM25 search → cross-encoder rerank
    ├─ L4 Graph (Zep/Graphiti): entity resolution + bi-temporal edges + community_search
-   ├─ L5 Cognee KG: background extract (entity-merge pending)
+   ├─ L5 Cognee KG: background extract (entity-merge + chunking)
    ├─ L6 HippoRAG/LightRAG: dual-level + mix retrieval, PPR/spreading-activation boost
-   └─ ASYNC: supervised background extraction (episode-anchor pending)
+   └─ ASYNC: supervised background extraction (episode-anchored)
 ```
 
 All layers share **one Postgres** (facts, graph, blocks, sessions) with pgvector +
