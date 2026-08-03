@@ -163,6 +163,72 @@ async def test_rerank_puts_exact_match_first(user_id):
     assert scores == sorted(scores, reverse=True), "rerank scores must be monotonically descending"
 
 
+# --- NEW (Mem0): full CRUD + metadata + search filters ---
+@pytest.mark.asyncio
+async def test_mem0_crud_and_filters(user_id):
+    from memory.atomic import memory_crud
+    f = await insert_fact(
+        user_id, "User prefers PostgreSQL", run_id="run-1",
+        categories=["database", "preference"], memory_type="semantic",
+    )
+    # get
+    got = await memory_crud.get_memory(f.id, user_id)
+    assert got.memory_type == "semantic" and "database" in got.categories
+    # search filter by category
+    found = await search_facts(user_id, "PostgreSQL", categories=["database"])
+    assert any(r.id == f.id for r in found), "category filter should match"
+    # update
+    upd = await memory_crud.update_memory(f.id, "User prefers PostgreSQL 16", user_id)
+    assert upd.id != f.id  # new version inserted
+    after = await search_facts(user_id, "PostgreSQL 16", run_id="run-1")
+    assert any("PostgreSQL 16" in r.fact_text for r in after)
+    # delete
+    await memory_crud.delete_memory(upd.id, user_id)
+    with pytest.raises(Exception):
+        await memory_crud.get_memory(upd.id, user_id)
+    # delete_all by run_id operates on remaining ACTIVE facts in that run.
+    # (update_memory already soft-deactivated the originals, so add a fresh active fact.)
+    await insert_fact(user_id, "User prefers PostgreSQL for caching layers", run_id="run-1")
+    n = await memory_crud.delete_all(user_id, run_id="run-1")
+    assert n >= 1
+    # idempotent: a second sweep over the same scope finds nothing left active
+    assert await memory_crud.delete_all(user_id, run_id="run-1") == 0
+
+
+# --- NEW (LightRAG mix + Graphiti community_search) ---
+@pytest.mark.asyncio
+async def test_lightrag_mix_and_communities(user_id):
+    from memory.graph import upsert_node, update_edge, community_search, detect_communities
+    a = await upsert_node(user_id, "TechCorp", "Company")
+    b = await upsert_node(user_id, "Alice", "Person")
+    c = await upsert_node(user_id, "KareOS", "Product")
+    await update_edge(user_id, a.id, b.id, "employs")
+    await update_edge(user_id, a.id, c.id, "builds")
+    comms = await detect_communities(user_id)
+    assert len(comms) == 1 and comms[0]["size"] == 3
+    res = await community_search(user_id, "TechCorp product")
+    assert len(res) >= 1 and "TechCorp" in res[0]["members"]
+    # LightRAG mix mode returns communities in high_level
+    from memory.archival import retrieve_memory
+    mix = await retrieve_memory(user_id, "TechCorp", mode="mix")
+    assert mix["mode"] == "mix"
+    assert "communities" in mix["high_level"]
+
+
+# --- NEW (Letta): read_only block enforcement ---
+@pytest.mark.asyncio
+async def test_letta_readonly_block(user_id):
+    from memory.working import create_memory_block, update_block
+    await create_memory_block(user_id, "system_prompt", "System instructions", "Do no harm.", read_only=True)
+    with pytest.raises(Exception):
+        await update_block(user_id, "system_prompt", "hacked")
+    # non-readonly still editable
+    await update_block(user_id, "user_profile", "Name: Test User")
+    rec = await get_blocks(user_id)
+    assert "Test User" in rec.blocks.to_block_map()["user_profile"].value
+
+
+
 # --- NEW (GBrain): typed links + backlinks + traversal ---
 @pytest.mark.asyncio
 async def test_gbrain_typed_links_and_traversal(user_id):

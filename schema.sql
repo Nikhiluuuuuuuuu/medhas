@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS atomic_facts (
     embedding vector(384),
     importance_score FLOAT NOT NULL DEFAULT 5.0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    run_id VARCHAR(255) NULL,                 -- Mem0 run scoping
+    categories TEXT[] NULL,                   -- Mem0 categories
+    memory_type VARCHAR(50) NOT NULL DEFAULT 'semantic',  -- semantic | episodic | procedural
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,          -- free-form metadata
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     expired_at TIMESTAMPTZ NULL
 );

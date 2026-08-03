@@ -1,7 +1,8 @@
 """Layer 3 (Mem0): Insert atomic fact with Mem0-style dedup & LLM decision matrix."""
 
 import hashlib
-from typing import Optional
+import json
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 from infrastructure.db import DatabasePool
 from infrastructure.llm import FastEmbeddingProvider, GroqLLMProvider
@@ -12,6 +13,7 @@ from schemas import AtomicFactSchema
 from config import settings
 from utils import measure_latency, log_atomic, log_error
 from core.exceptions import StorageOperationError
+from memory.atomic.json_utils import _coerce_json
 
 embedder = FastEmbeddingProvider()
 
@@ -25,7 +27,11 @@ async def insert_fact(
     fact_text: str,
     is_reflection: bool = False,
     session_id: Optional[UUID] = None,
-    agent_id: Optional[str] = None
+    agent_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    categories: Optional[List[str]] = None,
+    memory_type: str = "semantic",
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> AtomicFactSchema:
     """Insert fact into atomic_facts with Mem0-style primary hash dedup + LLM decision matrix.
 
@@ -114,16 +120,19 @@ async def insert_fact(
             async with DatabasePool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO atomic_facts (user_id, session_id, agent_id, fact_text, embedding, is_active, content_hash)
-                    VALUES ($1, $2, $3, $4, $5::vector, TRUE, $6)
-                    RETURNING id, user_id, session_id, agent_id, fact_text, is_active, created_at;
+                    INSERT INTO atomic_facts (user_id, session_id, agent_id, run_id, fact_text, embedding, is_active, content_hash, categories, memory_type, metadata)
+                    VALUES ($1, $2, $3, $4, $5, $6::vector, TRUE, $7, $8, $9, $10::jsonb)
+                    RETURNING id, user_id, session_id, agent_id, run_id, fact_text, categories, memory_type, metadata, is_active, created_at;
                     """,
-                    user_id, session_id, agent_id, fact_text, vector_str, content_hash
+                    user_id, session_id, agent_id, run_id, fact_text, vector_str, content_hash,
+                    categories or [], memory_type, json.dumps(metadata or {})
                 )
                 assert row is not None, "Failed to insert atomic fact"
                 fact = AtomicFactSchema(
                     id=row["id"], user_id=row["user_id"], session_id=row["session_id"],
-                    agent_id=row["agent_id"], fact_text=row["fact_text"],
+                    agent_id=row["agent_id"], run_id=row["run_id"], fact_text=row["fact_text"],
+                    categories=list(row["categories"] or []), memory_type=row["memory_type"],
+                    metadata=_coerce_json(row["metadata"]),
                     is_active=row["is_active"], created_at=row["created_at"]
                 )
                 log_atomic(f"Inserted new active fact: '{fact_text}'")

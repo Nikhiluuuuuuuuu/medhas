@@ -8,6 +8,7 @@ from memory.graph.belief_revision import update_bayesian_belief
 from memory.graph.export_graph import export_knowledge_graph
 from memory.graph.get_active_edges import get_active_edges
 from memory.graph.links import create_link, remove_link, get_backlinks, traverse_graph
+from memory.graph.community import detect_communities, community_search
 
 __all__ = [
     "upsert_node",
@@ -22,5 +23,7 @@ __all__ = [
     "create_link",
     "remove_link",
     "get_backlinks",
-    "traverse_graph"
+    "traverse_graph",
+    "detect_communities",
+    "community_search"
 ]

@@ -9,6 +9,7 @@ from schemas import FactSearchResult
 from config import settings
 from utils import measure_latency, log_atomic, log_error
 from core.exceptions import StorageOperationError
+from memory.atomic.json_utils import _coerce_json
 from memory.atomic.ebbinghaus_decay import calculate_ebbinghaus_retention
 embedder = FastEmbeddingProvider()
 
@@ -69,10 +70,16 @@ async def search_facts(
     apply_rrf: bool = True,
     session_id: Optional[UUID] = None,
     agent_id: Optional[str] = None,
-    boost_entities: Optional[List[str]] = None
+    boost_entities: Optional[List[str]] = None,
+    run_id: Optional[str] = None,
+    categories: Optional[List[str]] = None,
+    memory_type: Optional[str] = None,
+    topics: Optional[List[str]] = None,
+    themes: Optional[List[str]] = None,
 ) -> List[FactSearchResult]:
     """Execute Mem0 Multi-Signal RRF (Reciprocal Rank Fusion) hybrid search across Dense Vector, BM25 Full-Text, and Recency Decay, then a deterministic fusion rerank.
 
+    Mem0-equivalent search filters: run_id, categories, memory_type, topics, themes.
     boost_entities: list of activated graph entity names (HippoRAG PPR). Facts that mention
     any boosted entity get a small relevance boost so the knowledge graph actually influences
     what the agent recalls.
@@ -83,34 +90,48 @@ async def search_facts(
             vector_str = f"[{','.join(str(x) for x in embedding)}]"
 
             async with DatabasePool.acquire() as conn:
-                # 1. Fetch vector similarity & BM25 rank candidates with multi-scope filtering
-                rows = await conn.fetch(
-                    """
-                    SELECT 
-                        id, 
+                # Build dynamic WHERE for Mem0-equivalent filters.
+                where = ["user_id = $3", "is_active = TRUE"]
+                params: List[Any] = [vector_str, query_text, user_id, session_id, agent_id]
+                p = 6
+                if session_id is not None:
+                    where.append(f"($4::uuid IS NULL OR session_id = $4)")
+                else:
+                    where.append("($4::uuid IS NULL OR session_id = $4)")
+                where.append("($5::text IS NULL OR agent_id = $5)")
+                if run_id is not None:
+                    where.append(f"run_id = ${p}"); params.append(run_id); p += 1
+                if memory_type is not None:
+                    where.append(f"memory_type = ${p}"); params.append(memory_type); p += 1
+                if categories:
+                    where.append(f"categories && ${p}"); params.append(categories); p += 1
+                if topics:
+                    where.append(f"categories && ${p}"); params.append(topics); p += 1
+                if themes:
+                    where.append(f"categories && ${p}"); params.append(themes); p += 1
+
+                sql = f"""
+                    SELECT
+                        id,
                         user_id,
                         session_id,
                         agent_id,
-                        fact_text, 
+                        run_id,
+                        fact_text,
+                        categories,
+                        memory_type,
+                        metadata,
                         importance_score,
                         (1 - (embedding <=> $1::vector)) AS raw_similarity,
                         (1 - (embedding <=> $1::vector)) * (1.0 / (1.0 + 0.05 * (EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at)) / 86400.0))) AS decayed_similarity,
                         ts_rank_cd(to_tsvector('english', fact_text), plainto_tsquery('english', $2)) AS fts_rank,
                         created_at
                     FROM atomic_facts
-                    WHERE user_id = $3 
-                      AND is_active = TRUE
-                      AND ($4::uuid IS NULL OR session_id = $4)
-                      AND ($5::text IS NULL OR agent_id = $5)
+                    WHERE {' AND '.join(where)}
                     ORDER BY embedding <=> $1::vector ASC
                     LIMIT 30;
-                    """,
-                    vector_str,
-                    query_text,
-                    user_id,
-                    session_id,
-                    agent_id
-                )
+                """
+                rows = await conn.fetch(sql, *params)
 
                 if not rows:
                     return []
@@ -185,7 +206,11 @@ async def search_facts(
                             importance_score=float(r["importance_score"]),
                             created_at=r["created_at"],
                             session_id=r["session_id"],
-                            agent_id=r["agent_id"]
+                            agent_id=r["agent_id"],
+                            run_id=r.get("run_id"),
+                            categories=list(r.get("categories") or []),
+                            memory_type=r.get("memory_type", "semantic"),
+                            metadata=_coerce_json(r.get("metadata")),
                         ))
                         # stash composite score for ranking (not part of schema)
                         _composite[fid] = composite_score

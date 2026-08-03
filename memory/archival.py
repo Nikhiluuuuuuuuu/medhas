@@ -63,8 +63,8 @@ async def recall_archival(user_id: str, query: str, limit: int = 5) -> List[Dict
 
 
 # LightRAG query modes: naive (vector only), local (entity/core facts),
-# global (graph/community summary), hybrid (both).
-QUERY_MODES = ("naive", "local", "global", "hybrid")
+# global (graph/community summary), hybrid (both), mix (local + global + community).
+QUERY_MODES = ("naive", "local", "global", "hybrid", "mix")
 
 
 async def retrieve_memory(
@@ -81,6 +81,8 @@ async def retrieve_memory(
     - local:  entity-centric — atomic facts + low-level graph relationships.
     - global: relationship/community-centric — graph summary + reflections.
     - hybrid: local + global combined (default).
+    - mix:    local + global + Graphiti community-search over detected communities
+              (LightRAG `mix` = entity + relation + community synthesis).
     """
     if mode not in QUERY_MODES:
         mode = "hybrid"
@@ -97,5 +99,16 @@ async def retrieve_memory(
         return {"mode": "local", "facts": low, "high_level": {}}
     if mode == "global":
         return {"mode": "global", "facts": [], "high_level": high}
+
+    if mode == "mix":
+        # LightRAG `mix`: fuse local facts + global concepts + community-level synthesis.
+        from memory.graph import community_search
+        communities = await community_search(user_id, query, limit=limit)
+        return {
+            "mode": "mix",
+            "facts": low,
+            "high_level": {**high, "communities": communities},
+        }
+
     # hybrid
     return {"mode": "hybrid", "facts": low, "high_level": high}

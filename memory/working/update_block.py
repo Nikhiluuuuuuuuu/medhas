@@ -19,6 +19,9 @@ async def update_block(user_id: str, block_name: str, content: str) -> WorkingMe
 
         # Preserve existing metadata (description / limit) and only swap value.
         existing = blocks[clean_name]
+        # Letta read_only enforcement: agents cannot edit a read_only block.
+        if existing.read_only:
+            raise StorageOperationError(f"Block '{clean_name}' is read_only and cannot be modified.")
         existing.value = content
         blocks[clean_name] = existing
 

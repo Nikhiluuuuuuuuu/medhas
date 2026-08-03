@@ -14,7 +14,9 @@ async def create_memory_block(
     label: str,
     description: str,
     value: str = "",
-    limit_tokens: int = 1000
+    limit_tokens: int = 1000,
+    read_only: bool = False,
+    tags: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Create a new dynamic core memory block in working memory RAM.
 
@@ -31,7 +33,9 @@ async def create_memory_block(
                 label=clean_label,
                 description=description,
                 value=value,
-                limit_tokens=limit_tokens
+                limit_tokens=limit_tokens,
+                read_only=read_only,
+                tags=tags or []
             )
             blocks[clean_label] = block_obj
 

@@ -6,7 +6,7 @@ custom blocks (e.g. ``tech_stack``) to persist alongside the canonical ones.
 """
 
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from pydantic import BaseModel, Field
 
 
@@ -16,6 +16,8 @@ class MemoryBlock(BaseModel):
     description: str = Field(default="", description="Purpose of this block.")
     value: str = Field(default="", description="Current text content of the block.")
     limit_tokens: int = Field(default=1000, description="Soft token budget for the block.")
+    read_only: bool = Field(default=False, description="If True, agent tools cannot edit this block (Letta read_only enforcement).")
+    tags: List[str] = Field(default_factory=list, description="Letta-style block tags for retrieval/filtering.")
 
 
 # Canonical block labels every user gets by default.
