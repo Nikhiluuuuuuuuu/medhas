@@ -112,6 +112,19 @@ async def insert_fact(
                     if target_id:
                         log_atomic(f"Mem0 Matrix: Deactivating conflicting fact {target_id} ({action})")
                         await deactivate_fact(target_id)
+                    else:
+                        # LLM asked to UPDATE/DELETE but named no resolvable target — do NOT
+                        # silently insert a duplicate. Require a valid target; otherwise treat as
+                        # ADD only if no near-duplicate candidate exists, else NO_CHANGE.
+                        log_atomic(
+                            f"Mem0 Matrix: {action} requested with no target_id; "
+                            f"falling back to NO_CHANGE/ADD guardrail"
+                        )
+                        if near_dup:
+                            action = "NO_CHANGE"
+                            target_id = near_dup.id
+                        else:
+                            action = "ADD"
 
             # 4. Embed + store new fact
             embedding = await embedder.embed_text(fact_text)

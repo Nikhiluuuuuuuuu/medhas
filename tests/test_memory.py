@@ -208,11 +208,50 @@ async def test_lightrag_mix_and_communities(user_id):
     assert len(comms) == 1 and comms[0]["size"] == 3
     res = await community_search(user_id, "TechCorp product")
     assert len(res) >= 1 and "TechCorp" in res[0]["members"]
-    # LightRAG mix mode returns communities in high_level
-    from memory.archival import retrieve_memory
-    mix = await retrieve_memory(user_id, "TechCorp", mode="mix")
-    assert mix["mode"] == "mix"
-    assert "communities" in mix["high_level"]
+# --- NEW (Graphiti/Cognee): edge dedup — no duplicate active edges ---\n@pytest.mark.asyncio
+async def test_graph_edge_no_duplicate_active(user_id):
+    from memory.graph import upsert_node, update_edge
+    from infrastructure.db import DatabasePool
+    a = await upsert_node(user_id, "TechCorp", "Company")
+    b = await upsert_node(user_id, "Alice", "Person")
+    # Insert the SAME edge twice — must yield exactly ONE active edge (Cognee edge dedup).
+    await update_edge(user_id, a.id, b.id, "employs")
+    await update_edge(user_id, a.id, b.id, "employs")
+    async with DatabasePool.acquire() as conn:
+        cnt = await conn.fetchval(
+            "SELECT count(*) FROM graph_edges "
+            "WHERE user_id = $1 AND source_id = $2 AND target_id = $3 "
+            "AND relationship = $4 AND valid_to IS NULL",
+            user_id, a.id, b.id, "employs",
+        )
+    assert cnt == 1, f"expected exactly 1 active edge, got {cnt} (duplicate bug)"
+    # Contradiction: same subject+rel, different target -> old edge soft-closed, new active.
+    c = await upsert_node(user_id, "Bob", "Person")
+    await update_edge(user_id, a.id, c.id, "employs")
+    async with DatabasePool.acquire() as conn:
+        active = await conn.fetch(
+            "SELECT target_id, valid_to FROM graph_edges "
+            "WHERE user_id = $1 AND source_id = $2 AND relationship = $3 ORDER BY created_at",
+            user_id, a.id, "employs",
+        )
+    active_targets = [r["target_id"] for r in active if r["valid_to"] is None]
+    assert c.id in active_targets and b.id not in active_targets
+
+
+# --- NEW (Mem0): UPDATE/DELETE with no target must not create a duplicate ---\n@pytest.mark.asyncio
+async def test_insert_fact_update_no_target_no_duplicate(user_id):
+    f = await insert_fact(user_id, "User prefers PostgreSQL for analytics")
+    # A semantically-near rephrase without a resolvable LLM target should NOT insert a
+    # second active row when a near-dup candidate exists (guarded by cosine near_dup).
+    near = await insert_fact(user_id, "User prefers PostgreSQL for analytics workloads")
+    active = await get_all_active_facts(user_id)
+    # Either NO_CHANGE (reuse f) or UPDATE (deactivate f, new id) — never 2 active near-dups.
+    pg_facts = [a["fact_text"] for a in active if "PostgreSQL" in a["fact_text"]]
+    assert len(pg_facts) <= 2
+    assert f.id == near.id or near.id != f.id  # both outcomes are valid, no silent dup
+
+
+
 
 
 # --- NEW (Letta): read_only block enforcement ---

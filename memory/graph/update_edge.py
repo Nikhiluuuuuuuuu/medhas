@@ -25,6 +25,40 @@ async def update_edge(
     async with measure_latency(f"memory.graph.update_edge ({relationship})"):
         try:
             async with DatabasePool.acquire() as conn:
+                # 0. Idempotency / dedup (Cognee merge_deduplicated_edges semantics): if an
+                # ACTIVE edge with the exact same (source, target, relationship) already exists,
+                # reuse it instead of creating a duplicate active edge. This mirrors Cognee's
+                # identity-based edge dedup and prevents unintended duplicate edges in the graph.
+                existing_same = await conn.fetchrow(
+                    """
+                    SELECT id FROM graph_edges
+                    WHERE user_id = $1 AND source_id = $2 AND target_id = $3
+                      AND relationship = $4 AND valid_to IS NULL
+                    LIMIT 1;
+                    """,
+                    user_id, source_id, target_id, relationship,
+                )
+                if existing_same is not None:
+                    log_graph(
+                        f"Edge dedup: reused active edge [bold white]{source_id}[/bold white] "
+                        f"--[[cyan]{relationship}[/cyan]]--> [bold white]{target_id}[/bold white]"
+                    )
+                    row = await conn.fetchrow(
+                        """
+                        SELECT id, user_id, source_id, target_id, relationship, link_type,
+                               link_source, valid_from, valid_to, created_at
+                        FROM graph_edges WHERE id = $1;
+                        """,
+                        existing_same["id"],
+                    )
+                    return GraphEdgeSchema(
+                        id=row["id"], user_id=row["user_id"], source_id=row["source_id"],
+                        target_id=row["target_id"], relationship=row["relationship"],
+                        link_type=row["link_type"], link_source=row["link_source"],
+                        valid_from=row["valid_from"], valid_to=row["valid_to"],
+                        created_at=row["created_at"],
+                    )
+
                 # 1. Invalidate the prior active edge that this new edge contradicts:
                 # same subject (source) + same relationship, but a DIFFERENT target. This is the
                 # Graphiti bi-temporal pattern — the old claim is soft-closed (valid_to set),
