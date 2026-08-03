@@ -34,6 +34,7 @@ class FactSearchResult(BaseModel):
     fact_text: str
     similarity: float
     rrf_score: float
+    fts_rank: float = 0.0  # true Postgres BM25/FTS score (ts_rank_cd) — used in fusion rerank
     importance_score: float
     created_at: datetime
     session_id: Optional[UUID] = None

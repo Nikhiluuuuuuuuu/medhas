@@ -254,6 +254,27 @@ async def test_insert_fact_update_no_target_no_duplicate(user_id):
 
 
 
+# --- NEW (Cognee/Mem0 hybrid): real BM25/FTS score flows into fusion rerank ---
+@pytest.mark.asyncio
+async def test_search_uses_real_fts_bm25_rank(user_id):
+    from memory.atomic import memory_crud
+    from memory.atomic.search_facts import search_facts, rerank_facts
+    await memory_crud.reset_user(user_id)
+    await insert_fact(user_id, "KareOS is a hospital management platform built by TechCorp")
+    await insert_fact(user_id, "TechCorp employs Alice as the lead platform engineer")
+    await insert_fact(user_id, "Kraionyx is an AI startup based in Hyderabad founded in 2025")
+    res = await search_facts(user_id, "KareOS hospital platform", limit=5)
+    # The fact containing the query keywords must surface a non-zero real FTS rank,
+    # proving the hybrid search uses Postgres ts_rank_cd (BM25) not a keyword proxy.
+    assert len(res) >= 1
+    fts_vals = [r.fts_rank for r in res]
+    assert max(fts_vals) > 0.0, "expected a real non-zero FTS/BM25 score"
+    assert len({round(v, 6) for v in fts_vals}) > 1, "FTS scores must vary across facts"
+    # rerank_facts must run without error and preserve fts_rank on the schema
+    reranked = rerank_facts("KareOS hospital platform", res)
+    assert all(hasattr(r, "fts_rank") for r in reranked)
+    await memory_crud.reset_user(user_id)
+
 # --- NEW (Letta): read_only block enforcement ---
 @pytest.mark.asyncio
 async def test_letta_readonly_block(user_id):

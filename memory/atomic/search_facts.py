@@ -41,18 +41,17 @@ def rerank_facts(
 
     dense = _minmax([float(r.similarity) for r in results])
     rrf = _minmax([float(r.rrf_score) for r in results])
-    q_tokens = {t.lower() for t in query_text.split() if len(t) > 2}
+    # Use the REAL Postgres FTS/BM25 score (ts_rank_cd) instead of a coarse token-overlap
+    # heuristic — aligns the fusion with Cognee's bm25_rank in hybrid/ranking.py.
+    fts = _minmax([float(getattr(r, "fts_rank", 0.0)) or 0.0 for r in results])
 
     for r in results:
         fact_lc = r.fact_text.lower()
-        kw_overlap = sum(1 for t in q_tokens if t in fact_lc)
-        kw_ratio = kw_overlap / max(1, len(q_tokens))
-
         graph_boost = 1.0
         if boost_entities and any(ent.lower() in fact_lc for ent in boost_entities):
             graph_boost = 1.25
 
-        base = 0.5 * dense[r.similarity] + 0.25 * rrf[r.rrf_score] + 0.25 * kw_ratio
+        base = 0.5 * dense[r.similarity] + 0.25 * rrf[r.rrf_score] + 0.25 * fts[float(getattr(r, "fts_rank", 0.0)) or 0.0]
         imp = max(0.1, min(1.0, float(r.importance_score) / 10.0))
         retention = calculate_ebbinghaus_retention(r.created_at)
         score = base * imp * retention * graph_boost
@@ -89,10 +88,17 @@ async def search_facts(
             embedding = await embedder.embed_text(query_text)
             vector_str = f"[{','.join(str(x) for x in embedding)}]"
 
+            # BM25/FTS query: OR-join query tokens so ANY term match scores (Cognee/Mem0
+            # keyword search rewards partial overlap). Passed as a parameter — never
+            # concatenated into SQL — so it is injection-safe.
+            fts_query = " | ".join(t for t in query_text.split() if t) or query_text
+
             async with DatabasePool.acquire() as conn:
                 # Build dynamic WHERE for Mem0-equivalent filters.
+                # $2 is the OR-joined FTS query (used by to_tsquery); query_text itself is
+                # only used in Python for fuzzy matching, so it is NOT a SQL parameter.
                 where = ["user_id = $3", "is_active = TRUE"]
-                params: List[Any] = [vector_str, query_text, user_id, session_id, agent_id]
+                params: List[Any] = [vector_str, fts_query, user_id, session_id, agent_id]
                 p = 6
                 if session_id is not None:
                     where.append(f"($4::uuid IS NULL OR session_id = $4)")
@@ -124,7 +130,7 @@ async def search_facts(
                         importance_score,
                         (1 - (embedding <=> $1::vector)) AS raw_similarity,
                         (1 - (embedding <=> $1::vector)) * (1.0 / (1.0 + 0.05 * (EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at)) / 86400.0))) AS decayed_similarity,
-                        ts_rank_cd(to_tsvector('english', fact_text), plainto_tsquery('english', $2)) AS fts_rank,
+                        ts_rank_cd(to_tsvector('english', fact_text), to_tsquery('english', $2::text)) AS fts_rank,
                         created_at
                     FROM atomic_facts
                     WHERE {' AND '.join(where)}
@@ -203,6 +209,7 @@ async def search_facts(
                             fact_text=r["fact_text"],
                             similarity=sim,
                             rrf_score=rrf_val,
+                            fts_rank=float(r["fts_rank"]),
                             importance_score=float(r["importance_score"]),
                             created_at=r["created_at"],
                             session_id=r["session_id"],
