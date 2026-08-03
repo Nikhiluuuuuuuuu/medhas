@@ -1,263 +1,282 @@
-# Medhas — Production-Grade AGI Memory Roadmap
+# Medhas — Production-Grade Human-Like AGI Memory: Research-Grounded Roadmap
 
-> **Goal:** evolve Medhas from a 6-in-1 memory engine (Mem0 + Cognee + Letta/MemGPT +
-> Graphiti/Zep + HippoRAG + LightRAG) into a **brain-like AGI memory system** — with
-> perception (ingest),短期/working memory, long-term consolidation, sleep-time
-> reflection, belief revision, forgetting, and metacognitive retrieval — all production-hardened.
+> **Purpose:** Take Medhas from a 6-in-1 memory engine (Mem0 + Cognee + Letta/MemGPT +
+> Graphiti/Zep + HippoRAG + LightRAG) into a **brain-like AGI memory system** — with the
+> full human memory lifecycle: encode → consolidate (sleep) → store (episodic/semantic/
+> procedural) → retrieve (recognition + recall) → forget (decay) → self-modify.
 >
-> **Status anchor:** 2026-08-03. All 12 alignment gaps are RESOLVED (24 tests pass on
-> `main`, live Groq key, no mock data). This document lists the **enhancements only** —
-> the work required to reach a production, brain-like AGI memory system. Each item is
-> tagged with the current module it touches and the inspiration it maps to.
+> **Status anchor:** 2026-08-03. All 12 alignment gaps RESOLVED (24 tests pass on `main`,
+> live Groq key, no mock data). This document lists **enhancements only**, now grounded in
+> cognitive-science and 2024–2026 AGI-memory research (sources cited inline).
 >
-> **How to read:** Items are grouped into Phases (P1–P6). Each item has:
-> `Inspired by` · `Current state` · `What to build` · `Where` · `Acceptance test`.
+> **Design spine — CoALA (Cognitive Architectures for Language Agents, Princeton 2023,
+> arxiv 2309.02427):** human-like agent memory needs four types —
+> **in-context (working)**, **episodic**, **semantic**, **procedural** — plus a structured
+> action space to read/write each. Medhas already touches all four (working blocks, episodes,
+> atomic facts, procedural playbooks); this roadmap makes each *biologically faithful* and adds
+> the missing **consolidation, forgetting, and metacognition** loops.
 
 ---
 
-## Phase 1 — Ingestion & Extraction Depth (the "perception" stage)
+## Primary research sources (read & cited)
 
-### E1. True document-chunking + structured extraction pipeline (Cognee-style)
-- **Inspired by:** Cognee `cognify()` pipeline (`tasks/chunking`, `tasks/extraction`).
-- **Current state:** `pipeline/async_extractor.py` does a **single LLM call** over the raw
-  turn text; within-batch dedup is done but there is **no chunking, no entity/edge
-  separation stage, no re-extraction over chunk boundaries**.
-- **What to build:**
-  - Split input into overlapping chunks (size + overlap, configurable).
-  - Per-chunk entity + edge extraction, then **cross-chunk entity resolution** (merge entities
-    that appear in different chunks) before persistence.
-  - Emit structured `EntityNode` / `Edge` objects (not just free text), feeding `upsert_node`
-    and `update_edge` directly.
-- **Where:** `pipeline/async_extractor.py` → new `pipeline/chunking.py`, `pipeline/extraction.py`.
-- **Acceptance:** a 5-paragraph doc yields entities merged across chunks (no duplicate nodes);
-  regression test on chunk-boundary entity.
+| # | Source | Key mechanism used below |
+|---|--------|--------------------------|
+| [1] | CoALA — Cognitive Architectures for Language Agents (Princeton, 2023, 2309.02427) | 4 memory types; action space |
+| [2] | Generative Agents (Park et al., 2023, 2304.03442) | memory stream + reflection + retrieval by recency/importance/relevance |
+| [3] | HippoRAG 2 (2025, 2502.14802) | offline indexing → recognition memory (triple filter) → PPR → QA; neuro-grounded |
+| [4] | A-MEM: Agentic Memory (NeurIPS 2025, 2502.12110) | observation → contextual note → reflection link → memory EVOLUTION |
+| [5] | SCM: Sleep-Consolidated Memory with Algorithmic Forgetting (2026, 2604.20943) | sleep replay + deliberate forgetting |
+| [6] | TOKI: Bitemporal Operator Algebra for Contradiction Resolution (2026, 2606.06240) | created/valid/invalid temporal lattice, contradiction operators |
+| [7] | Zep / Graphiti + LongMemEval (2025) | bi-temporal KG; 71% temporal recall vs Mem0 49% |
+| [8] | Human memory: reconsolidation (PMC3069643), spacing/testing effect, Ebbinghaus forgetting curve | decay + spaced reinforcement |
 
-### E2. Multi-pass self-reflection extraction (Mem0 `add` + reflection)
-- **Inspired by:** Mem0 `add()` runs entity + relationship + then a reflection pass.
-- **Current state:** one-shot extraction; reflections only appear later in the dream cycle.
-- **What to build:** after fact/edge extraction, run a **second LLM pass** that emits higher-order
-  insights ("X implies Y") as `is_reflection` facts at ingest time, not only during sleep.
-- **Where:** `pipeline/async_extractor.py`, `memory/atomic/insert_fact.py` (`is_reflection` flag exists).
-- **Acceptance:** ingest produces reflection-tagged facts; retrievable via `search_facts`.
+---
 
-### E3. Multimodal memory (images / audio / documents) (LightRAG + Mem0 multimodal)
-- **Inspired by:** LightRAG multimodal, Mem0 image/PDF ingest.
-- **Current state:** text-only (`FastEmbeddingProvider` 384-dim, `GroqLLMProvider` text).
-- **What to build:**
-  - Add a CLIP/VLM embedder path; store modality + extracted caption in `atomic_facts.metadata`
-    and a `modality` column.
-  - Route non-text inputs through captioning → existing text pipeline.
-- **Where:** `infrastructure/llm/` (new `MultimodalProvider`), `schema.py`, `atomic_facts` schema.
+## Phase 1 — Human memory taxonomy made faithful (the "what kind of memory" stage)
+
+### E1. Formalize the 4 CoALA memory types as first-class stores
+- **Inspired by:** [1] CoALA; [2] Generative Agents memory stream.
+- **Current state:** `working` (blocks), `episodes`, `atomic_facts`, `procedural` playbooks exist but are **not unified under one typed model**; nothing declares "this is episodic vs semantic."
+- **What to build:** a `MemoryType` enum + `memory_type` column on each store; a routing table mapping type→store. Episodic = raw episodes; Semantic = distilled facts/insights; Procedural = playbooks; In-context = working blocks + current turn.
+- **Where:** `schemas/`, `memory/__init__.py`, `pipeline/agent_graph.py`.
+- **Acceptance:** every stored item has a `memory_type`; retrieval can scope by type.
+
+### E2. Episodic→Semantic gist compression (hippocampal replay → neocortex)
+- **Inspired by:** [2] reflection; [3] HippoRAG offline indexing; human episodic-to-semantic transition.
+- **Current state:** `dream_cycle` makes reflections/patterns but **does not convert episodes into semantic gist**; episodes stay raw.
+- **What to build:** scheduled job summarizes old episodes into semantic "gist" facts, marks episode `compressed`, and links gist→source episode (provenance). This is the brain's "episodic memory becomes general knowledge" path.
+- **Where:** `memory/episodes.py`, `pipeline/consolidation_scheduler.py`.
+- **Acceptance:** old episode yields a gist fact; episode flagged `compressed`; gist retrievable as semantic memory.
+
+### E3. Procedural memory as executable, self-improving skills
+- **Inspired by:** [1] procedural memory; [4] A-MEM evolution.
+- **Current state:** `procedural/playbook.py` stores playbooks but **no auto-extraction from successful episodes** and no refinement on failure.
+- **What to build:** after a successful task, extract a reusable playbook; on failure, mark it deprecated and propose a revision. Treat playbooks as "muscle memory."
+- **Where:** `memory/procedural/`, `pipeline/agent_graph.py`.
+- **Acceptance:** a repeated successful pattern auto-creates a playbook; a failing one is flagged.
+
+---
+
+## Phase 2 — Encoding & Perception (the "sensory intake" stage)
+
+### E4. Chunking + cross-chunk entity resolution (Cognee-style perceive)
+- **Inspired by:** [3] HippoRAG offline passage→triple extraction; Cognee `cognify`.
+- **Current state:** `pipeline/async_extractor.py` = single LLM call, no chunking, no structured entity objects.
+- **What to build:** overlapping chunking → per-chunk entity/edge extraction → **cross-chunk resolution** (merge same entity across chunks) → structured `EntityNode`/`Edge` → `upsert_node`/`update_edge`. Mirrors HippoRAG's passage-level OpenIE.
+- **Where:** new `pipeline/chunking.py`, `pipeline/extraction.py`.
+- **Acceptance:** 5-paragraph doc → entities merged across chunk boundaries (no dup nodes).
+
+### E5. Recognition memory filter (HippoRAG 2 "recognition" stage)
+- **Inspired by:** [3] HippoRAG 2 recognition memory — a *quick, cheap* pass that filters the KG to candidate triples before expensive PPR.
+- **Current state:** retrieval goes straight to vector + PPR; no cheap recognition pre-filter.
+- **What to build:** a two-stage retrieve — (1) cheap lexical/FTS+kNN recognition filter to narrow the graph, (2) PPR/semantic over the narrowed set. This is why HippoRAG 2 beats flat RAG on associative recall.
+- **Where:** `memory/graph/spreading_activation.py`, `memory/atomic/search_facts.py`.
+- **Acceptance:** recall@k improves on multi-hop queries vs single-stage.
+
+### E6. Multimodal encoding (CLIP/VLM → caption → memory)
+- **Inspired by:** [1] unified representation; LightRAG multimodal; Mem0 multimodal.
+- **Current state:** text-only (`FastEmbeddingProvider` 384-dim).
+- **What to build:** multimodal embedder path; `modality` + `caption` in `atomic_facts.metadata`; non-text → caption → existing text pipeline. Enables "remember this image/sound."
+- **Where:** `infrastructure/llm/` (new `MultimodalProvider`), `schema.py`.
 - **Acceptance:** image → caption → fact stored → retrieved by text query.
 
 ---
 
-## Phase 2 — Consolidation & "Sleep-Time" Memory (the hippocampal replay / dreaming stage)
+## Phase 3 — Consolidation & Sleep (the "hippocampal replay" stage)
 
-### E4. Scheduled sleep-time consolidation (HippoRAG + human sleep replay)
-- **Inspired by:** HippoRAG `graph_prompt` offline consolidation; human memory replay during sleep.
-- **Current state:** `memory/atomic/dream_cycle.py` exists (`run_dream_cycle`) but is **manually
-  triggered** (`POST /memory/dream`), not scheduled.
-- **What to build:**
-  - A scheduler (cron/background worker) that runs `run_dream_cycle` per user on idle/off-peak.
-  - Add consolidation phases: **reflections → patterns → cross-fact contradiction detection →
-    belief strengthening → orphan cleanup** (already partially present — formalize as phases).
-- **Where:** new `pipeline/consolidation_scheduler.py`; wire to existing `run_dream_cycle`.
-- **Acceptance:** overnight job consolidates a user's day-of facts; no contradictions remain active.
+### E7. Scheduled sleep-time consolidation (SCM + human sleep replay)
+- **Inspired by:** [5] SCM sleep-consolidated memory; [2] reflection loop; human offline consolidation during sleep/quiet rest.
+- **Current state:** `run_dream_cycle` exists but is **manual** (`POST /memory/dream`); no scheduler.
+- **What to build:** a durable background worker that runs per-user consolidation on idle/off-peak:
+  **phases = reflect → detect contradictions → strengthen belief → compress episodes → prune orphans.** This is the single most brain-like addition.
+- **Where:** new `pipeline/consolidation_scheduler.py` wrapping `run_dream_cycle`.
+- **Acceptance:** overnight job consolidates a user's day; no active contradictions remain.
 
-### E5. Contradiction & conflict resolution with uncertainty (Graphiti bi-temporal + Zep)
-- **Inspired by:** Graphiti `valid_at`/`invalid_at` soft-close; Zep conflict detection.
-- **Current state:** `update_edge` soft-closes on new contradictory edge (identity dedup present);
-  facts use `deactivate_fact` on UPDATE/DELETE. **No explicit uncertainty/belief score on facts**,
-  no "two sources disagree" surfacing.
-- **What to build:**
-  - Add `confidence`/`belief_confidence` + `source_count` to `atomic_facts` (mirror `belief_revision.py`
-    already on graph nodes).
-  - When a contradictory fact arrives, keep both as **active-with-uncertainty** and surface the
-    disagreement in retrieval (`uncertain: true`).
-- **Where:** `infrastructure/db/schema.py`, `memory/atomic/insert_fact.py`, `search_facts` result.
-- **Acceptance:** conflicting facts both retrievable; `uncertain` flag present; belief score updated.
+### E8. Memory evolution on integration (A-MEM observe→note→link→evolve)
+- **Inspired by:** [4] A-MEM — each new memory gets a contextual NOTE, is LINKED to related memories, and triggers EVOLUTION of those notes.
+- **Current state:** new facts are inserted; existing memories are **not updated** when a related new one arrives (except edge soft-close).
+- **What to build:** on insert, (1) write a contextual note, (2) link to top-k similar memories, (3) re-write/extend those memories' notes (evolution). This makes memory a *living graph*, not a log.
+- **Where:** `memory/atomic/insert_fact.py`, new `memory/atomic/evolve.py`.
+- **Acceptance:** inserting "X moved to Y" updates the note of the prior "X lives at Z" memory.
 
-### E6. Belief revision on facts (extend Graphiti-style Bayes to atomic facts)
-- **Inspired by:** `memory/graph/belief_revision.py` (odds-form Bayes) — currently **graph nodes only**.
-- **Current state:** Bayesian compounding exists for graph nodes; facts have no belief update.
-- **What to build:** apply the same incremental posterior update to `atomic_facts.belief_confidence`
-  when corroborated/contradicted across turns.
-- **Where:** `memory/atomic/insert_fact.py`, `memory/atomic/search_facts.py` (rank by belief).
-- **Acceptance:** repeated corroboration raises fact belief score; retrieval re-ranks accordingly.
+### E9. Spaced reinforcement & retrieval practice (spacing + testing effect)
+- **Inspired by:** [8] spacing effect (distributed practice strengthens memory), testing effect (retrieval > rereading).
+- **Current state:** facts have no "review schedule"; reactivation only happens on query.
+- **What to build:** a `next_review_at` (Leitner/spaced-repetition schedule) per fact; consolidation job *actively quizzes* (retrieval practice) low-recency important facts to strengthen them — not just passive decay. This is the testing effect applied to agent memory.
+- **Where:** `schema.py`, `pipeline/consolidation_scheduler.py`.
+- **Acceptance:** important stale facts get scheduled reviews; belief strengthens on successful reactivation.
 
 ---
 
-## Phase 3 — Forgetting, Salience & Importance (the "what matters" stage)
+## Phase 4 — Belief, Conflict & Truth (the "what is real" stage)
 
-### E7. Forgetting & decay (HippoRAG + human forgetting curve)
-- **Inspired by:** memory decay; HippoRAG relevance decay.
-- **Current state:** facts are deactivated (soft-delete) but **never expire by age/irrelevance**;
-  `recency` is used in ranking only.
-- **What to build:**
-  - Time + access-based decay: `last_accessed_at`, `access_count`; a consolidation job deactivates
-    low-salience, stale, rarely-accessed facts (configurable half-life).
-  - Protect high-belief / high-importance facts from decay.
-- **Where:** `schema.py`, `pipeline/consolidation_scheduler.py`, `search_facts` decay term.
-- **Acceptance:** low-salience stale facts auto-deactivate; important ones persist.
+### E10. Bitemporal contradiction lattice (TOKI + Zep/Graphiti)
+- **Inspired by:** [6] TOKI bitemporal operator algebra; [7] Zep/Graphiti `created_at/valid_at/invalid_at`.
+- **Current state:** `update_edge` soft-closes contradictory edges; facts use `deactivate_fact`. **No explicit valid-time lattice, no contradiction operators.**
+- **What to build:** full bitemporal model on facts + edges with `created_at`, `valid_from`, `valid_to`; operators: `contradicts`, `precedes`, `supersedes`. Query "what was true at T" resolves via the lattice. This is what gives Zep 71% vs Mem0 49% on LongMemEval.
+- **Where:** `infrastructure/db/schema.py`, `memory/atomic/insert_fact.py`, `memory/graph/update_edge.py`.
+- **Acceptance:** temporal query returns correct snapshot; contradictory facts coexist with `valid_to` set.
 
-### E8. Salience / importance learning (Mem0 + Letta)
-- **Inspired by:** Mem0 `importance` score; Letta block salience.
-- **Current state:** `FactSearchResult.importance_score` exists but is **static/heuristic**.
-- **What to build:** learn importance from access frequency, recency, contradiction events, and an
-  LLM salience judge for new facts; store + feed into fusion rerank.
-- **Where:** `memory/atomic/insert_fact.py`, `rerank_facts`, `schema.py`.
-- **Acceptance:** frequently-accessed facts gain importance; ranked higher over time.
+### E11. Belief revision on facts (extend Graphiti-style Bayes to atomic facts)
+- **Inspired by:** [7] Graphiti belief; existing `memory/graph/belief_revision.py` (graph-only today).
+- **Current state:** Bayesian compounding only on graph nodes.
+- **What to build:** apply incremental odds-form posterior to `atomic_facts.belief_confidence` on corroboration/contradiction; rank retrieval by belief.
+- **Where:** `memory/atomic/insert_fact.py`, `rerank_facts`.
+- **Acceptance:** repeated corroboration raises fact belief; retrieval re-ranks.
 
-### E9. Episodic → semantic compression (human memory: episodes become gist)
-- **Inspired by:** human episodic-to-semantic transition; Graphiti episode summarization.
-- **Current state:** `episodes` table stores raw episodes; `dream_cycle` makes reflections but
-  **does not compress episodes into semantic summaries**.
-- **What to build:** periodic job that summarizes old episodes into semantic "gist" facts and
-  marks episodes as `compressed`.
-- **Where:** `memory/episodes.py`, `pipeline/consolidation_scheduler.py`.
-- **Acceptance:** old episode yields a gist fact; episode flagged `compressed`.
-
----
-
-## Phase 4 — Metacognition & Retrieval Intelligence (the "executive function" stage)
-
-### E10. Broad metacognitive routing (expand `metacognition.py`)
-- **Inspired by:** Mem0 `manage`, Letta self-editing, human metacognition.
-- **Current state:** `pipeline/metacognition.py` has a **single** `evaluate_cognitive_mode` function;
-  not wired into `UnifiedMemoryEngine.execute_turn` retrieval selection.
-- **What to build:**
-  - Classify query intent (recall / learn / reflect / plan) and **select retrieval mode**
-    (naive/local/global/hybrid/mix) + memory tier (working/atomic/graph/archival) per intent.
-  - Decide when to trigger consolidation vs. immediate ingest.
-- **Where:** `pipeline/metacognition.py`, `pipeline/agent_graph.py`.
-- **Acceptance:** different query types hit different tiers/modes; covered by test.
-
-### E11. Multi-agent self-improvement loop (Mem0 + Letta agents)
-- **Inspired by:** Mem0 multi-agent, Letta agent runtime.
-- **Current state:** single extractor LLM; dream cycle single-pass reflection.
-- **What to build:** a critic/refiner agent that reviews extracted facts/edges for quality,
-  resolves ambiguity, and proposes schema fixes — runs during consolidation.
-- **Where:** `pipeline/agent_graph.py`, new `pipeline/self_improve.py`.
-- **Acceptance:** critic catches + fixes a low-quality extraction in test.
-
-### E12. Uncertainty & provenance surfacing in retrieval
-- **Inspired by:** Zep/Graphiti provenance; human "I'm not sure."
-- **Current state:** retrieval returns facts/edges; **no provenance or confidence in the response**.
-- **What to build:** attach `source_episode_id`, `belief_confidence`, `contradicted_by` to every
-  returned memory so the agent can express uncertainty.
-- **Where:** `search_facts`, `FactSearchResult`, `retrieve_memory` payload.
+### E12. Uncertainty & provenance in retrieval ("I'm not sure")
+- **Inspired by:** [7] Zep provenance; human metacognitive uncertainty.
+- **Current state:** retrieval returns facts/edges; **no belief/conflict/provenance in the payload.**
+- **What to build:** attach `source_episode_id`, `belief_confidence`, `contradicted_by[]`, `valid_at/valid_to` to every returned memory so the agent can express calibrated uncertainty.
+- **Where:** `FactSearchResult`, `retrieve_memory` payload.
 - **Acceptance:** retrieved item carries episode + belief + conflict pointers.
 
 ---
 
-## Phase 5 — Long-Horizon & Cross-Session Memory (the "lifetime" stage)
+## Phase 5 — Forgetting & Pruning (the "healthy forgetting" stage)
 
-### E13. Cross-session identity & continuity (Letta agent state + Mem0 user scoping)
-- **Inspired by:** Letta persistent agent blocks; Mem0 user/session scoping.
-- **Current state:** `user_id` + `session_id` + `agent_id` scoping exists; working blocks per-user;
-  **no cross-session "who is this user over time" continuity layer**.
-- **What to build:** a persistent `user_profile` (auto-updated from facts) + long-horizon narrative
-  memory that survives session churn.
+### E13. Algorithmic forgetting (SCM + Ebbinghaus curve)
+- **Inspired by:** [5] SCM "algorithmic forgetting"; [8] Ebbinghaus forgetting curve.
+- **Current state:** facts soft-deleted but **never expire by age/irrelevance**; recency used in ranking only.
+- **What to build:** time + access-based decay with a configurable half-life; protect high-belief/high-importance; consolidation job deactivates low-salience stale memories. Matches SCM's deliberate forgetting for signal clarity.
+- **Where:** `schema.py`, `pipeline/consolidation_scheduler.py`, `search_facts` decay term.
+- **Acceptance:** low-salience stale facts auto-deactivate; important ones persist.
+
+### E14. Salience / importance learning (Mem0 + Letta + Generative Agents)
+- **Inspired by:** [2] Generative Agents importance score; Mem0 `importance`; Letta block salience.
+- **Current state:** `FactSearchResult.importance_score` exists but is **static/heuristic**.
+- **What to build:** learn importance from access freq, recency, contradiction events, and an LLM salience judge at ingest; feed fusion rerank. High-importance facts resist forgetting (E13).
+- **Where:** `insert_fact`, `rerank_facts`, `schema.py`.
+- **Acceptance:** frequently-accessed facts gain importance; ranked higher; protected from decay.
+
+### E15. Reconsolidation on reactivation (memory becomes labile when recalled)
+- **Inspired by:** [8] reconsolidation (PMC3069643) — retrieving a memory makes it malleable; reinforced experience strengthens it.
+- **Current state:** retrieval is read-only; no state change on recall.
+- **What to build:** on retrieval, mark memory `last_accessed`, bump `access_count`, and (if contradicted during the same turn) trigger reconsolidation update rather than silent dup. This is the biological "recall to update" loop.
+- **Where:** `search_facts`, `insert_fact`.
+- **Acceptance:** recalling a fact updates its access metadata; contradiction during recall triggers evolution.
+
+---
+
+## Phase 6 — Metacognition & Executive Control (the "prefrontal" stage)
+
+### E16. Intent-aware retrieval routing (executive function)
+- **Inspired by:** [1] CoALA action space; [4] A-MEM; human metacognition.
+- **Current state:** `pipeline/metacognition.py` has **one** `evaluate_cognitive_mode` fn, unwired into `execute_turn`.
+- **What to build:** classify intent (recall/learn/reflect/plan) → select memory tier (working/atomic/graph/archival) + mode (naive/local/global/hybrid/mix) + whether to consolidate now. Wire into `UnifiedMemoryEngine.execute_turn`.
+- **Where:** `pipeline/metacognition.py`, `pipeline/agent_graph.py`.
+- **Acceptance:** different intents hit different tiers/modes; test-covered.
+
+### E17. Multi-agent self-improvement loop (critic/refiner)
+- **Inspired by:** [4] A-MEM evolution; Letta agent runtime; Mem0 multi-agent.
+- **Current state:** single extractor LLM; dream cycle single-pass.
+- **What to build:** a critic agent reviews extracted facts/edges for quality, resolves ambiguity, proposes schema fixes — runs during consolidation (E7).
+- **Where:** `pipeline/agent_graph.py`, new `pipeline/self_improve.py`.
+- **Acceptance:** critic catches + fixes a low-quality extraction in test.
+
+### E18. Calibrated confidence & abstention
+- **Inspired by:** [7] provenance; human "I don't know."
+- **Current state:** no abstention; system returns best-effort.
+- **What to build:** if top-k retrieval belief/coverage is below threshold, the agent responds with calibrated uncertainty or "insufficient memory," rather than hallucinating. Ties to E12.
+- **Where:** `retrieve_memory`, `pipeline/agent_graph.py`.
+- **Acceptance:** low-coverage query yields an explicit uncertainty response.
+
+---
+
+## Phase 7 — Long-Horizon & Continuity (the "lifetime" stage)
+
+### E19. Cross-session identity & lifetime narrative (Letta + Mem0 user scoping)
+- **Inspired by:** [1] user-scoped semantic memory; Letta persistent agent blocks.
+- **Current state:** `user_id`/`session_id`/`agent_id` scoping exists; **no persistent cross-session "who is this user" layer.**
+- **What to build:** auto-updated `user_profile` from facts + long-horizon narrative that survives session churn and is injected as working context.
 - **Where:** `memory/working.py`, new `memory/user_profile.py`.
 - **Acceptance:** profile updates across sessions; surfaced in recall.
 
-### E14. Temporal & causal reasoning over the graph (Graphiti + HippoRAG)
-- **Inspired by:** Graphiti temporal queries; HippoRAG causal paths.
-- **Current state:** bi-temporal edges + PPR spreading activation; **no explicit causal/temporal query API**.
-- **What to build:** query API for "what was true at time T", "what caused X", "sequence of events"
-  over `valid_from`/`valid_to`.
+### E20. Temporal & causal query API (Graphiti + HippoRAG)
+- **Inspired by:** [7] temporal KG; [3] PPR causal paths.
+- **Current state:** bi-temporal edges + PPR; **no explicit temporal/causal query API.**
+- **What to build:** API for "what was true at T", "what caused X", "event sequence" over `valid_from/valid_to`.
 - **Where:** `memory/graph/`, `memory/episodes.py`.
 - **Acceptance:** temporal/causal query returns correct snapshot.
 
-### E15. Recall evaluation harness (Recall@K, faithfulness, contradiction rate)
-- **Inspired by:** Mem0/Letta eval suites; RAG evaluation (Faithfulness, Answer-Relevancy).
-- **Current state:** only functional tests; **no quality/recall metrics**.
-- **What to build:** golden-set eval: inject known facts, assert Recall@K, assert no
-  contradiction in top-k, assert reflection quality. CI-gated.
-- **Where:** `tests/eval_memory.py`, `pytest.ini`.
-- **Acceptance:** `pytest tests/eval_memory.py` reports Recall@K + faithfulness scores.
+### E21. Recall evaluation harness (Recall@K, faithfulness, LongMemEval-style)
+- **Inspired by:** [7] LongMemEval benchmark (temporal recall); RAG faithfulness.
+- **Current state:** functional tests only; **no quality metrics.**
+- **What to build:** golden-set eval — inject known facts, assert Recall@K, no-contradiction-in-top-k, reflection quality, temporal accuracy. CI-gated.
+- **Where:** `tests/eval_memory.py`.
+- **Acceptance:** `pytest tests/eval_memory.py` reports Recall@K + faithfulness + temporal accuracy.
 
 ---
 
-## Phase 6 — Production Hardening (the "deployable" stage)
+## Phase 8 — Production Hardening (the "deployable" stage)
 
-### E16. AuthN/AuthZ + tenant isolation (multi-user SaaS)
-- **Inspired by:** Letta App Server auth; Graphiti namespaces (`group_id`).
-- **Current state:** `server.py` + `live/server.py` are **open FastAPI** (no auth, no rate-limit,
-  `user_id` is a plain string — no tenant enforcement).
-- **What to build:**
-  - API key / OAuth bearer auth (FastAPI `Depends`).
-  - Row-level tenant isolation enforced on every query (`user_id` bound to token).
-  - `group_id` namespaces for multi-agent partitioning.
-- **Where:** `server.py`, `live/server.py`, `infrastructure/security.py`.
-- **Acceptance:** unauthenticated request → 401; user A cannot read user B.
+### E22. AuthN/AuthZ + tenant isolation
+- **Inspired by:** Letta App Server auth; Graphiti `group_id` namespaces.
+- **Current state:** `server.py`/`live/server.py` are **open FastAPI** (no auth, no rate-limit).
+- **What to build:** API-key/OAuth bearer (`Depends`); row-level tenant isolation; `group_id` partitioning.
+- **Where:** `server.py`, `infrastructure/security.py`.
+- **Acceptance:** unauth → 401; user A cannot read user B.
 
-### E17. Rate limiting, quotas & cost guardrails
-- **Inspired by:** production LLM cost control (token budgets).
-- **Current state:** Groq key used directly; no per-user quota, no token budgeting.
-- **What to build:** per-user rate limit (slowapi/Redis), token budget per turn, circuit-breaker on
-  provider 429/5xx (the live run already hits Groq 429 — needs graceful backoff + fallback).
-- **Where:** `server.py`, `infrastructure/llm/groq_provider.py` (add backoff), new `infrastructure/ratelimit.py`.
-- **Acceptance:** exceeding quota → 429 with retry-after; provider outage degrades gracefully.
+### E23. Rate limiting, quotas & cost guardrails
+- **Inspired by:** production LLM cost control; live run already hits Groq 429.
+- **Current state:** Groq key used directly; no quota; no backoff.
+- **What to build:** per-user rate limit (Redis/slowapi), token budget/turn, circuit-breaker + graceful fallback on 429/5xx.
+- **Where:** `server.py`, `groq_provider.py`, new `infrastructure/ratelimit.py`.
+- **Acceptance:** over-quota → 429 retry-after; provider outage degrades gracefully.
 
-### E18. Observability, tracing & drift monitoring
-- **Inspired by:** Graphiti OpenTelemetry; Mem0 tracing.
-- **Current state:** `utils.measure_latency` + logs; **no distributed tracing, no metrics endpoint**.
-- **What to build:** OpenTelemetry spans per layer, Prometheus metrics (`/metrics`), alert on
-  extraction failure rate / latency p95, memory-growth dashboards.
+### E24. Observability, tracing & drift monitoring
+- **Inspired by:** [7] Graphiti OpenTelemetry; Mem0 tracing.
+- **Current state:** `utils.measure_latency` + logs; no tracing/metrics endpoint.
+- **What to build:** OTel spans per layer, Prometheus `/metrics`, alerts on extraction-fail/latency p95, memory-growth dashboards.
 - **Where:** `utils.py`, `server.py`, new `infrastructure/observability.py`.
-- **Acceptance:** `/metrics` scrapable; trace per request across layers.
+- **Acceptance:** `/metrics` scrapable; per-request trace.
 
-### E19. Horizontal scaling & multi-backend support
-- **Inspired by:** Graphiti multi-driver (Neo4j/FalkorDB); Cognee multi-vector store.
-- **Current state:** single Postgres + pgvector; in-process connection pool.
-- **What to build:** read-replica / connection pooling (PgBouncer), optional graph-store backend
-  abstraction for very large graphs, embedding batching, async queue for extraction (already bg,
-  but make it durable with retries).
-- **Where:** `infrastructure/db/`, `pipeline/async_extractor.py` (durable queue).
+### E25. Horizontal scaling & multi-backend
+- **Inspired by:** [7] Graphiti multi-driver (Neo4j/FalkorDB); Cognee multi-vector store.
+- **Current state:** single Postgres + pgvector; in-process pool.
+- **What to build:** PgBouncer/pooling, optional graph-store backend abstraction for huge graphs, embedding batching, durable extraction queue (retries).
+- **Where:** `infrastructure/db/`, `pipeline/async_extractor.py`.
 - **Acceptance:** load test 1k users; extraction queue survives restart.
 
-### E20. Backup, point-in-time recovery & data sovereignty
+### E26. Backup, PITR & data sovereignty (self-hostable)
 - **Inspired by:** user preference for self-hostable / data-sovereign tools.
 - **Current state:** raw Postgres; no documented backup/PITR.
-- **What to build:** WAL archival + PITR runbook, encrypted snapshots, export/import of a user's
-  full memory graph (facts + edges + episodes + blocks) as portable JSON.
+- **What to build:** WAL archival + PITR runbook, encrypted snapshots, portable JSON export/import of a user's full memory graph.
 - **Where:** `infrastructure/`, new `scripts/export_memory.py`.
-- **Acceptance:** full user memory exported → re-imported into fresh DB identically.
+- **Acceptance:** full user memory exported → re-imported identically.
 
 ---
 
-## Priority order (recommended execution)
+## Recommended execution order
 
-| Rank | Item | Why first |
-|------|------|-----------|
-| 1 | **E16 AuthN/tenant isolation** | blocks any real deployment; security-critical |
-| 2 | **E1 Chunking + structured extraction** | raises extraction quality across all downstream layers |
-| 3 | **E4 Scheduled consolidation** | turns dream cycle from manual into a real brain-like sleep stage |
-| 4 | **E5/E6 Conflict + belief on facts** | gives memory truthfulness + uncertainty (core to AGI memory) |
-| 5 | **E7/E8 Forgetting + salience** | without decay the system grows unbounded and loses signal |
-| 6 | **E10 Metacognitive routing** | makes retrieval intelligent per intent |
-| 7 | **E15 Eval harness** | you can't claim "production" without measurable recall/faithfulness |
-| 8 | **E17 Rate-limit + cost guardrails** | needed before multi-user load |
-| 9 | **E13 Cross-session continuity** | the "lifetime memory" property |
-| 10 | **E3 Multimodal** | breadth of perception |
-| 11 | **E9/E11/E12/E14** | depth: compression, self-improvement, provenance, temporal reasoning |
-| 12 | **E18/E19/E20** | scale, observe, recover |
+| Rank | Item | Why |
+|------|------|-----|
+| 1 | **E22 AuthN/tenant isolation** | blocks real deployment; security-critical |
+| 2 | **E4 Chunking + structured extraction** | raises quality across all layers |
+| 3 | **E7 Scheduled sleep consolidation** | turns dream cycle into a real brain-like sleep stage |
+| 4 | **E10 Bitemporal contradiction lattice** | truthfulness + temporal recall (Zep's 71% edge) |
+| 5 | **E11/E13/E14 Belief + forgetting + salience** | without these memory grows unbounded and loses signal |
+| 6 | **E16 Metacognitive routing** | intelligent per-intent retrieval |
+| 7 | **E21 Eval harness** | can't claim "production" without measured recall/faithfulness |
+| 8 | **E23 Rate-limit + cost guardrails** | needed before multi-user load |
+| 9 | **E8 A-MEM evolution** | living, self-updating memory graph |
+| 10 | **E19 Cross-session continuity** | lifetime memory property |
+| 11 | **E2/E3/E5/E6/E9/E12/E15/E17/E18/E20** | depth: compression, procedural, recognition, multimodal, spacing, provenance, reconsolidation, self-improve, abstention, temporal |
+| 12 | **E24/E25/E26** | scale, observe, recover |
 
 ---
 
-## Definition of "done" (AGI-memory acceptance criteria)
+## "Done" criteria — a memory system that works like a human brain
 
-- [ ] Ingest handles text + documents + multimodal with chunking + cross-chunk resolution.
-- [ ] Memory consolidates automatically on a sleep schedule (reflections, patterns, compression).
-- [ ] Conflicting facts coexist with explicit uncertainty + belief scores; retrieval ranks by belief.
-- [ ] Forgetting decays low-salience stale memory while protecting important facts.
-- [ ] Retrieval is metacognitively routed per intent and surfaces provenance + confidence.
-- [ ] Cross-session user continuity persists a lifetime narrative.
-- [ ] Eval harness proves Recall@K ≥ target and faithfulness ≥ target on a golden set.
-- [ ] API is authenticated, tenant-isolated, rate-limited, observable, and backed up.
-- [ ] Horizontally scalable and survives provider outages gracefully.
+- [ ] **Encode:** text + docs + multimodal, chunked, with cross-chunk resolution and a cheap recognition pre-filter.
+- [ ] **Store:** explicit episodic / semantic / procedural / in-context types, each a first-class store.
+- [ ] **Consolidate:** automatic sleep-time replay (reflect → contradict → strengthen → compress → prune) + A-MEM evolution on integration.
+- [ ] **Believe:** bitemporal contradiction lattice + Bayesian belief on facts; retrieval surfaces provenance + calibrated uncertainty.
+- [ ] **Forget:** algorithmic forgetting with spaced reinforcement; important memories protected; recall triggers reconsolidation.
+- [ ] **Retrieve:** metacognitively routed per intent; recognition + PPR; temporal/causal queries.
+- [ ] **Persist:** cross-session user continuity + lifetime narrative.
+- [ ] **Measure:** Recall@K, faithfulness, temporal accuracy on a golden set (LongMemEval-style).
+- [ ] **Deploy:** authenticated, tenant-isolated, rate-limited, observable, backed-up, horizontally scalable, survives provider outages.
 
-*This file is the single source of truth for AGI-memory enhancements. Alignment gaps (Mem0/Cognee/
-Letta/Graphiti/HippoRAG/LightRAG) are tracked separately in `ARCHITECTURE_REFERENCE.md` and are all RESOLVED.*
+*Single source of truth for AGI-memory enhancements. Alignment gaps (Mem0/Cognee/Letta/Graphiti/HippoRAG/LightRAG) are tracked in `ARCHITECTURE_REFERENCE.md` and are all RESOLVED.*
