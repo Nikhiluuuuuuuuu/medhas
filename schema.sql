@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS graph_edges (
     source_id UUID NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
     target_id UUID NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
     relationship VARCHAR(255) NOT NULL,
+    link_type VARCHAR(100) NULL,   -- GBrain-style typed link (e.g. 'relates_to', 'works_at', 'founded')
+    link_source VARCHAR(50) NOT NULL DEFAULT 'extracted',  -- provenance: 'manual' | 'extracted' | 'inferred'
     valid_from TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     valid_to TIMESTAMPTZ NULL, -- NULL indicates currently active/valid edge
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,

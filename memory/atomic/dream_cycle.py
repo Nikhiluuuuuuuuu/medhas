@@ -2,13 +2,20 @@ import json
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 from infrastructure.db import DatabasePool
+from infrastructure.llm import GroqLLMProvider, FastEmbeddingProvider
 from memory.atomic.insert_fact import insert_fact
 from memory.working import update_block
 import memory.graph as graph_mem
-from infrastructure.llm import GroqLLMProvider
 from utils import measure_latency, log_atomic, log_graph, log_error
 
 dream_llm = GroqLLMProvider()
+embedder = FastEmbeddingProvider()
+
+PATTERNS_PROMPT = """\
+You mine recurring behavioral or topical PATTERNS from a set of memory reflections.
+Return ONLY a JSON object: {"patterns": ["pattern 1", "pattern 2"]}
+Each pattern is a concise, durable insight (e.g. "User consistently prefers local-first tools").
+If no clear pattern exists, return {"patterns": []}."""
 
 DREAM_CYCLE_PROMPT = """
 You are an advanced multi-layer memory consolidation worker (Dream Cycle).
@@ -136,10 +143,78 @@ async def run_dream_cycle(user_id: str) -> Dict[str, Any]:
                 if graph_updated_count > 0:
                     log_graph(f"🌙 [DREAM CYCLE GRAPH] Synthesized [bold green]{graph_updated_count}[/bold green] new knowledge graph connections!")
 
+                # 3. (NEW) Pattern extraction: synthesize cross-session recurring themes from
+                # reflections (GBrain `dream` patterns phase). Stores pattern facts for recall.
+                patterns = []
+                try:
+                    reflections_text = "\n".join(f"- {r}" for r in reflections)
+                    if reflections_text:
+                        pat_msgs = [
+                            {"role": "system", "content": PATTERNS_PROMPT},
+                            {"role": "user", "content": f"Reflections to mine for patterns:\n{reflections_text}"}
+                        ]
+                        pat_resp = await dream_llm.chat_completion(pat_msgs, temperature=0.3)
+                        pat_raw = (pat_resp.get("content", "") or "").strip()
+                        if "```json" in pat_raw:
+                            pat_raw = pat_raw.split("```json", 1)[1].split("```", 1)[0].strip()
+                        elif "```" in pat_raw:
+                            pat_raw = pat_raw.split("```", 1)[1].split("```", 1)[0].strip()
+                        try:
+                            pat_data = json.loads(pat_raw)
+                            for p in pat_data.get("patterns", []):
+                                ptext = f"[Pattern] {p}" if not str(p).startswith("[Pattern]") else str(p)
+                                await insert_fact(user_id, ptext, is_reflection=True)
+                                patterns.append(ptext)
+                        except Exception:
+                            pass
+                except Exception as pe:
+                    log_error(f"Dream cycle patterns phase skipped: {pe}")
+
+                # 4. (NEW) Embedding refresh: backfill any atomic facts missing an embedding.
+                embed_refreshed = 0
+                try:
+                    async with DatabasePool.acquire() as conn:
+                        missing = await conn.fetch(
+                            "SELECT id, fact_text FROM atomic_facts WHERE user_id=$1 AND is_active=TRUE AND embedding IS NULL LIMIT 50;",
+                            user_id,
+                        )
+                        for m in missing:
+                            try:
+                                emb = await embedder.embed_text(m["fact_text"])
+                                vec = f"[{','.join(str(x) for x in emb)}]"
+                                await conn.execute("UPDATE atomic_facts SET embedding=$2::vector WHERE id=$1", m["id"], vec)
+                                embed_refreshed += 1
+                            except Exception:
+                                pass
+                except Exception as ee:
+                    log_error(f"Dream cycle embed-refresh skipped: {ee}")
+
+                # 5. (NEW) Orphan detection: active facts never retrieved/referenced recently.
+                orphans = 0
+                try:
+                    async with DatabasePool.acquire() as conn:
+                        orphans = await conn.fetchval(
+                            """
+                            SELECT count(*) FROM atomic_facts
+                            WHERE user_id=$1 AND is_active=TRUE
+                              AND created_at < NOW() - INTERVAL '30 days'
+                              AND importance_score <= 2.0;
+                            """,
+                            user_id,
+                        ) or 0
+                except Exception as oe:
+                    log_error(f"Dream cycle orphan detection skipped: {oe}")
+
+                log_atomic(f"🌙 [DREAM CYCLE] reflections={len(reflections)} patterns={len(patterns)} "
+                           f"embed_refreshed={embed_refreshed} orphans={orphans}")
+
                 return {
                     "status": "success",
                     "reflections": reflections,
-                    "graph_edges_created": graph_updated_count
+                    "patterns": patterns,
+                    "graph_edges_created": graph_updated_count,
+                    "embed_refreshed": embed_refreshed,
+                    "orphans_detected": int(orphans),
                 }
 
         except Exception as e:

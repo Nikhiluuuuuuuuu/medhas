@@ -29,6 +29,8 @@ async def initialize_schema() -> None:
                 await conn.execute("ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS embedding vector(384) NULL;")
                 await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS session_id UUID NULL;")
                 await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS agent_id VARCHAR(255) NULL;")
+                await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS link_type VARCHAR(100) NULL;")
+                await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS link_source VARCHAR(50) NOT NULL DEFAULT 'extracted';")
                 await conn.execute("CREATE TABLE IF NOT EXISTS episodes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id VARCHAR(255) NOT NULL, session_id UUID NULL, agent_id VARCHAR(255) NULL, content TEXT NOT NULL, source VARCHAR(50) NOT NULL DEFAULT 'message', reference_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);")
                 await conn.execute("CREATE TABLE IF NOT EXISTS archival_memory (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id VARCHAR(255) NOT NULL, agent_id VARCHAR(255) NULL, content TEXT NOT NULL, embedding vector(384) NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);")
                 await conn.execute("CREATE INDEX IF NOT EXISTS idx_atomic_facts_fts ON atomic_facts USING gin(to_tsvector('english', fact_text));")

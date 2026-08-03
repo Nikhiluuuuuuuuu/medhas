@@ -23,6 +23,8 @@ class GraphEdgeSchema(BaseModel):
     source_id: UUID
     target_id: UUID
     relationship: str
+    link_type: Optional[str] = None       # GBrain-style typed link (provenance-aware)
+    link_source: str = "extracted"         # 'manual' | 'extracted' | 'inferred'
     valid_from: datetime
     valid_to: Optional[datetime] = None  # None indicates active edge
     created_at: Optional[datetime] = None

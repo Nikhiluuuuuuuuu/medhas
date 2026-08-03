@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import Dict, Any, Optional
 import memory.session as session_mem
 from infrastructure.llm import GroqLLMProvider
@@ -96,6 +96,41 @@ class UnifiedMemoryEngine:
             task.add_done_callback(_log_task_failure)
 
             return final_text
+
+
+    async def capture(
+        self,
+        user_id: str,
+        content: str,
+        *,
+        session_id: Optional[UUID] = None,
+        agent_id: Optional[str] = None,
+        background: bool = True,
+    ) -> Dict[str, Any]:
+        """GBrain `capture` equivalent: single entrypoint to get content into the brain.
+
+        Routes the content through the same ingest path as a conversation turn:
+        logs it as a session message (or a standalone message if no session), runs the
+        hot-path retrieval, and schedules the Cognee-style background extraction that
+        populates atomic facts + the bi-temporal graph. Returns a summary handle so the
+        caller can correlate.
+
+        `background=False` runs extraction synchronously (useful for tests/bulk ingest).
+        """
+        async with measure_latency("UnifiedMemoryEngine.capture"):
+            sid = session_id or uuid4()
+            await session_mem.ensure_session_exists(sid, user_id)
+            await session_mem.log_message(sid, "user", content)
+
+            if not background:
+                await extract_and_persist_background(user_id, content, "", session_id=sid, agent_id=agent_id)
+                return {"status": "ingested", "session_id": str(sid)}
+
+            task = asyncio.create_task(
+                extract_and_persist_background(user_id, content, "", session_id=sid, agent_id=agent_id)
+            )
+            task.add_done_callback(_log_task_failure)
+            return {"status": "scheduled", "session_id": str(sid)}
 
 
 def _log_task_failure(task: "asyncio.Task[None]") -> None:

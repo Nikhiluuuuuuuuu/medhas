@@ -161,3 +161,42 @@ async def test_rerank_puts_exact_match_first(user_id):
     # relevance scores must be in descending order
     scores = [r.rrf_score for r in res]
     assert scores == sorted(scores, reverse=True), "rerank scores must be monotonically descending"
+
+
+# --- NEW (GBrain): typed links + backlinks + traversal ---
+@pytest.mark.asyncio
+async def test_gbrain_typed_links_and_traversal(user_id):
+    from memory.graph import upsert_node, create_link, get_backlinks, traverse_graph
+    a = await upsert_node(user_id, "Kraionyx", "Company")
+    b = await upsert_node(user_id, "Nikhil", "Person")
+    c = await upsert_node(user_id, "KareOS", "Product")
+    # Typed, provenance-tracked links (GBrain link/link-source)
+    await create_link(user_id, b.id, a.id, "founded", link_type="founded", link_source="manual")
+    await create_link(user_id, a.id, c.id, "builds", link_type="builds", link_source="extracted")
+    # Backlinks: who points TO Kraionyx?
+    bl = await get_backlinks(user_id, a.id)
+    assert any(d["source_name"] == "Nikhil" for d in bl), "Nikhil -> Kraionyx backlink missing"
+    # Traversal from Nikhil (out, depth 2) should reach Kraionyx and KareOS
+    trav = await traverse_graph(user_id, b.id, direction="out", depth=2)
+    names = {n["name"] for n in trav["nodes"]}
+    assert "Kraionyx" in names and "KareOS" in names, f"traversal should reach both: {names}"
+
+
+# --- NEW (GBrain): capture front-door + dream multi-phase cycle ---
+@pytest.mark.asyncio
+async def test_gbrain_capture_and_dream(user_id):
+    from pipeline.agent_graph import UnifiedMemoryEngine
+    from memory.atomic.dream_cycle import run_dream_cycle
+    from memory.atomic import get_all_active_facts
+    engine = UnifiedMemoryEngine()
+    # capture = single ingestion front-door (synchronous for test)
+    res = await engine.capture(user_id, "User prefers local-first, self-hostable tools", background=False)
+    assert res["status"] == "ingested"
+    facts = await get_all_active_facts(user_id)
+    assert any("local-first" in f["fact_text"].lower() or "self-hostable" in f["fact_text"].lower() for f in facts)
+    # Dream cycle: multi-phase consolidation (reflections/patterns/embed/orphans)
+    report = await run_dream_cycle(user_id)
+    assert report["status"] == "success"
+    assert "reflections" in report and "patterns" in report
+    assert "embed_refreshed" in report and "orphans_detected" in report
+

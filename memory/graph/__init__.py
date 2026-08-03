@@ -7,6 +7,7 @@ from memory.graph.spreading_activation import run_spreading_activation
 from memory.graph.belief_revision import update_bayesian_belief
 from memory.graph.export_graph import export_knowledge_graph
 from memory.graph.get_active_edges import get_active_edges
+from memory.graph.links import create_link, remove_link, get_backlinks, traverse_graph
 
 __all__ = [
     "upsert_node",
@@ -17,5 +18,9 @@ __all__ = [
     "run_spreading_activation",
     "update_bayesian_belief",
     "export_knowledge_graph",
-    "get_active_edges"
+    "get_active_edges",
+    "create_link",
+    "remove_link",
+    "get_backlinks",
+    "traverse_graph"
 ]

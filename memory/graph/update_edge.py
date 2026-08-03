@@ -15,10 +15,13 @@ async def update_edge(
     relationship: str,
     valid_from: Optional[datetime] = None,
     session_id: Optional[UUID] = None,
-    agent_id: Optional[str] = None
+    agent_id: Optional[str] = None,
+    link_type: Optional[str] = None,
+    link_source: str = "extracted"
 ) -> GraphEdgeSchema:
     """Update bi-temporal relationship: set valid_to on old edges and insert new active edge."""
     vf = valid_from or datetime.now(timezone.utc)
+    link_type = link_type or relationship
     async with measure_latency(f"memory.graph.update_edge ({relationship})"):
         try:
             async with DatabasePool.acquire() as conn:
@@ -45,9 +48,9 @@ async def update_edge(
                 # 2. Insert new bi-temporal edge (valid_to = NULL means currently valid)
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO graph_edges (user_id, session_id, agent_id, source_id, target_id, relationship, valid_from, valid_to)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
-                    RETURNING id, user_id, source_id, target_id, relationship, valid_from, valid_to, created_at;
+                    INSERT INTO graph_edges (user_id, session_id, agent_id, source_id, target_id, relationship, link_type, link_source, valid_from, valid_to)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)
+                    RETURNING id, user_id, source_id, target_id, relationship, link_type, link_source, valid_from, valid_to, created_at;
                     """,
                     user_id,
                     session_id,
@@ -55,6 +58,8 @@ async def update_edge(
                     source_id,
                     target_id,
                     relationship,
+                    link_type,
+                    link_source,
                     vf
                 )
                 assert row is not None, "Failed to insert bi-temporal edge"
@@ -64,6 +69,8 @@ async def update_edge(
                     source_id=row["source_id"],
                     target_id=row["target_id"],
                     relationship=row["relationship"],
+                    link_type=row["link_type"],
+                    link_source=row["link_source"],
                     valid_from=row["valid_from"],
                     valid_to=row["valid_to"],
                     created_at=row["created_at"]
