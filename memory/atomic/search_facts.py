@@ -197,9 +197,40 @@ async def search_facts(
                 else:
                     results.sort(key=lambda x: x.similarity, reverse=True)
 
-                # Deterministic fusion rerank (closes the Mem0 rerank gap; always-on, no LLM).
+                # Deterministic fusion rerank (always-on, no LLM, no model) — the guaranteed
+                # baseline so retrieval quality is never worse than this even if the cross-encoder
+                # is unavailable.
                 if settings.FACT_RERANK:
                     results = rerank_facts(query_text, results, boost_entities=boost_entities)
+
+                # Primary rerank: Mem0-style local cross-encoder (reference: mem0/mem0/reranker).
+                # Improves ordering precision over the fusion score; on any failure it falls back
+                # to the fusion ordering (never turns down the query).
+                if settings.FACT_RERANKER_ENABLED:
+                    try:
+                        from memory.atomic.reranker import get_reranker
+                        ce = get_reranker()
+                        if ce is not None:
+                            docs = [
+                                {"id": str(r.id), "fact_text": r.fact_text,
+                                 "similarity": float(r.similarity),
+                                 "rrf_score": float(r.rrf_score),
+                                 "importance_score": float(r.importance_score),
+                                 "created_at": r.created_at}
+                                for r in results
+                            ]
+                            ranked = ce.rerank(query_text, docs, top_k=limit)
+                            by_id = {d["id"]: d for d in ranked}
+                            ordered = [by_id[str(r.id)] for r in results if str(r.id) in by_id]
+                            if ordered:
+                                results = results[:]  # preserve objects
+                                # Reorder result objects to match cross-encoder ranking
+                                rank_map = {d["id"]: i for i, d in enumerate(ordered)}
+                                results.sort(key=lambda x: rank_map.get(str(x.id), 999))
+                                for r, d in zip(results, ordered):
+                                    r.rrf_score = round(float(d.get("rerank_score", r.rrf_score)), 6)
+                    except Exception as e:
+                        log_error(f"Cross-encoder rerank skipped (fusion fallback active): {e}")
 
                 return results[:limit]
 

@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     FACT_SEMANTIC_DUP_THRESHOLD: float = 0.92   # cosine above which two facts are "same claim"
     FACT_SEMANTIC_UPDATE_THRESHOLD: float = 0.78  # cosine above which incoming supersedes existing
     FACT_RERANK: bool = True                      # deterministic fusion rerank (closes Mem0 rerank gap)
+    FACT_RERANKER_ENABLED: bool = True            # use local cross-encoder reranker (Mem0-style) when available
+    FACT_RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # Mem0 SentenceTransformerReranker default
+    FACT_RERANKER_NORMALIZE: bool = True          # sigmoid-normalize cross-encoder logits to [0,1] (per Mem0)
     DECISION_MATRIX_MODEL: Optional[str] = None  # LLM model for the Mem0 decision matrix (None=default)
     
     model_config = SettingsConfigDict(

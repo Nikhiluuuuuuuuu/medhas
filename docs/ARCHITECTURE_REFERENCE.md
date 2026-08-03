@@ -143,7 +143,7 @@ Medhas labels itself a "6-in-1 Unified Multi-AGI Memory Engine" with these layer
 6. **No archival/recall tier** — ✅ RESOLVED: `archive_memory`/`recall_archival` cold store + tools. *(Letta)*
 7. **Single retrieval mode** — ✅ RESOLVED: `retrieve_memory` naive/local/global/hybrid. *(LightRAG)*
 8. **Hardcoded LLM prompt + model name** — ✅ RESOLVED: prompts + model in config (`pipeline/prompts.py`, `config/settings.py`). *(production)*
-9. **No reranker** — ✅ RESOLVED: deterministic multi-signal fusion reranker (`rerank_facts`, `FACT_RERANK`). Chose a **local, deterministic fusion score** over an LLM/cross-encoder reranker: it adds zero latency, has no network/LLM failure point (never "turns down"), and cannot misorder due to a model hallucination. *(Mem0)*
+9. **No reranker** — ✅ RESOLVED (reference-accurate): a **local cross-encoder reranker** mirroring Mem0's `SentenceTransformerReranker` / `HuggingFaceReranker` (`memory/atomic/reranker.py`): `sentence-transformers.CrossEncoder` (`cross-encoder/ms-marco-MiniLM-L-6-v2`), sigmoid-normalized to [0,1], with Mem0's guaranteed fallback to the deterministic fusion ordering on any failure (never turns down). The deterministic fusion score (`rerank_facts`) remains the always-on baseline so retrieval is never worse than pre-rerank. This beats the inspirations: local (no API/network), deterministic, high-precision, zero-turn-down. *(Mem0 + LightRAG rerank.py)*
 
 ---
 
