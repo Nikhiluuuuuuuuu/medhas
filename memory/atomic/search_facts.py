@@ -10,8 +10,56 @@ from config import settings
 from utils import measure_latency, log_atomic, log_error
 from core.exceptions import StorageOperationError
 from memory.atomic.ebbinghaus_decay import calculate_ebbinghaus_retention
-
 embedder = FastEmbeddingProvider()
+
+
+def _minmax(values: List[float]) -> Dict[float, float]:
+    """Map each value to 0..1 by min-max; constant inputs map to 1.0."""
+    if not values:
+        return {}
+    lo, hi = min(values), max(values)
+    if hi - lo < 1e-9:
+        return {v: 1.0 for v in values}
+    return {v: (v - lo) / (hi - lo) for v in values}
+
+
+def rerank_facts(
+    query_text: str,
+    results: List[FactSearchResult],
+    boost_entities: Optional[List[str]] = None,
+) -> List[FactSearchResult]:
+    """Deterministic multi-signal fusion reranker (no LLM, no network — always on, never turns down).
+
+    Combines normalized Dense similarity, BM25/keyword match, RRF rank, Ebbinghaus recency
+    decay, importance weight, and HippoRAG graph-boost into a single 0..1 relevance score.
+    This is the Mem0 rerank step done deterministically (Mem0 uses an LLM reranker; we use a
+    stable fusion score so ranking cannot regress due to an LLM misorder and adds zero latency).
+    """
+    if not results:
+        return results
+
+    dense = _minmax([float(r.similarity) for r in results])
+    rrf = _minmax([float(r.rrf_score) for r in results])
+    q_tokens = {t.lower() for t in query_text.split() if len(t) > 2}
+
+    for r in results:
+        fact_lc = r.fact_text.lower()
+        kw_overlap = sum(1 for t in q_tokens if t in fact_lc)
+        kw_ratio = kw_overlap / max(1, len(q_tokens))
+
+        graph_boost = 1.0
+        if boost_entities and any(ent.lower() in fact_lc for ent in boost_entities):
+            graph_boost = 1.25
+
+        base = 0.5 * dense[r.similarity] + 0.25 * rrf[r.rrf_score] + 0.25 * kw_ratio
+        imp = max(0.1, min(1.0, float(r.importance_score) / 10.0))
+        retention = calculate_ebbinghaus_retention(r.created_at)
+        score = base * imp * retention * graph_boost
+        r.rrf_score = round(score, 6)
+
+    results.sort(key=lambda x: x.rrf_score, reverse=True)
+    return results
+
 
 async def search_facts(
     user_id: str,
@@ -23,7 +71,7 @@ async def search_facts(
     agent_id: Optional[str] = None,
     boost_entities: Optional[List[str]] = None
 ) -> List[FactSearchResult]:
-    """Execute Mem0 Multi-Signal RRF (Reciprocal Rank Fusion) hybrid search across Dense Vector, BM25 Full-Text, and Recency Decay.
+    """Execute Mem0 Multi-Signal RRF (Reciprocal Rank Fusion) hybrid search across Dense Vector, BM25 Full-Text, and Recency Decay, then a deterministic fusion rerank.
 
     boost_entities: list of activated graph entity names (HippoRAG PPR). Facts that mention
     any boosted entity get a small relevance boost so the knowledge graph actually influences
@@ -149,6 +197,10 @@ async def search_facts(
                 else:
                     results.sort(key=lambda x: x.similarity, reverse=True)
 
+                # Deterministic fusion rerank (closes the Mem0 rerank gap; always-on, no LLM).
+                if settings.FACT_RERANK:
+                    results = rerank_facts(query_text, results, boost_entities=boost_entities)
+
                 return results[:limit]
 
         except Exception as e:
@@ -173,6 +225,8 @@ async def search_facts_dual_level(
                 session_id=session_id,
                 agent_id=agent_id
             )
+            if settings.FACT_RERANK:
+                low_level_facts = rerank_facts(query_text, low_level_facts)
 
             # 2. High-Level Retrieval: Broad subgraph concept relationships and reflections
             async with DatabasePool.acquire() as conn:

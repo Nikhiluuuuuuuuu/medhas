@@ -137,13 +137,13 @@ Medhas labels itself a "6-in-1 Unified Multi-AGI Memory Engine" with these layer
 
 1. **Atomic dedup is wrong** — add md5 hash dedup + real LLM decision matrix; remove the 0.75/0.90 cosine magic numbers. *(Mem0)*
 2. **No entity merge in graph** — add semantic-duplicate node merge (score >= 0.95) on top of space-insensitive canonicalization. *(Mem0/Cognee)*
-3. **Graph edges not invalidated on contradiction** — soft-invalidate prior edge. *(Graphiti/Zep)*
-4. **Extraction has no context / no pipeline** — chunk + last-K context + entity resolution + episode anchor. *(Mem0/Cognee)*
-5. **Graph never used for retrieval** — wire spreading_activation/PPR into hot path. *(HippoRAG)*
-6. **No archival/recall tier** — add cold store + recall tool. *(Letta)*
-7. **Single retrieval mode** — add local/global/hybrid/mix. *(LightRAG)*
-8. **Hardcoded LLM prompt + model name** — move to config; allow provider swap. *(production)*
-9. **No reranker** — add optional cross-encoder/LLM rerank in search. *(Mem0)*
+3. **Graph edges not invalidated on contradiction** — ✅ RESOLVED: bi-temporal soft-close (valid_to) on contradiction. *(Graphiti/Zep)*
+4. **Extraction has no context / no pipeline** — ✅ RESOLVED: episode anchor + last-K context + entity resolution. *(Mem0/Cognee)*
+5. **Graph never used for retrieval** — ✅ RESOLVED: spreading_activation/PPR boosts fact retrieval in hot_path. *(HippoRAG)*
+6. **No archival/recall tier** — ✅ RESOLVED: `archive_memory`/`recall_archival` cold store + tools. *(Letta)*
+7. **Single retrieval mode** — ✅ RESOLVED: `retrieve_memory` naive/local/global/hybrid. *(LightRAG)*
+8. **Hardcoded LLM prompt + model name** — ✅ RESOLVED: prompts + model in config (`pipeline/prompts.py`, `config/settings.py`). *(production)*
+9. **No reranker** — ✅ RESOLVED: deterministic multi-signal fusion reranker (`rerank_facts`, `FACT_RERANK`). Chose a **local, deterministic fusion score** over an LLM/cross-encoder reranker: it adds zero latency, has no network/LLM failure point (never "turns down"), and cannot misorder due to a model hallucination. *(Mem0)*
 
 ---
 

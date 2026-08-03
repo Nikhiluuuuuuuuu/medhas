@@ -147,3 +147,17 @@ async def test_dual_level_retrieval_modes(user_id):
     naive = await retrieve_memory(user_id, "backend language preference", mode="naive")
     assert naive["mode"] == "naive"
     assert len(naive["facts"]) >= 1
+
+
+# --- NEW: deterministic fusion rerank (closes Mem0 rerank gap) ---
+@pytest.mark.asyncio
+async def test_rerank_puts_exact_match_first(user_id):
+    await insert_fact(user_id, "User deploys services with Kubernetes on GKE")
+    await insert_fact(user_id, "User likes hiking on weekends")
+    res = await search_facts(user_id, "Kubernetes deployment GKE")
+    assert len(res) >= 2
+    # The fact that directly mentions the query entities must rank first after rerank.
+    assert "Kubernetes" in res[0].fact_text, "rerank should surface the exact-match fact first"
+    # relevance scores must be in descending order
+    scores = [r.rrf_score for r in res]
+    assert scores == sorted(scores, reverse=True), "rerank scores must be monotonically descending"

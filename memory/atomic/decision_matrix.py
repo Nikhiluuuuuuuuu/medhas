@@ -67,11 +67,19 @@ async def decide_fact_action(
     existing_block = "\n".join(
         f"[{i}] {getattr(f, 'fact_text', str(f))}" for i, f in enumerate(existing)
     )
+    # NOTE: Build the prompt by concatenation, NOT str.format — the prompt contains literal
+    # JSON braces ({...}) which would make str.format raise KeyError.
+    user_content = (
+        "You are a precise JSON-only memory classifier.\n\n"
+        + DECISION_PROMPT
+        + "\n\nEXISTING facts (index = position, starting at 0):\n"
+        + existing_block
+        + "\n\nNEW fact:\n"
+        + new_fact
+    )
     messages = [
         {"role": "system", "content": "You are a precise JSON-only memory classifier."},
-        {"role": "user", "content": DECISION_PROMPT.format(
-            existing_block=existing_block, new_fact=new_fact
-        )},
+        {"role": "user", "content": user_content},
     ]
 
     client = llm or GroqLLMProvider()

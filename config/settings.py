@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     FACT_HASH_DEDUP: bool = True          # Skip re-insert if an active fact with same md5 hash exists
     FACT_SEMANTIC_DUP_THRESHOLD: float = 0.92   # cosine above which two facts are "same claim"
     FACT_SEMANTIC_UPDATE_THRESHOLD: float = 0.78  # cosine above which incoming supersedes existing
+    FACT_RERANK: bool = True                      # deterministic fusion rerank (closes Mem0 rerank gap)
     DECISION_MATRIX_MODEL: Optional[str] = None  # LLM model for the Mem0 decision matrix (None=default)
     
     model_config = SettingsConfigDict(
