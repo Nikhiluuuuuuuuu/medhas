@@ -4,9 +4,9 @@ The memory system does NOT use a frozen, hard-coded list of relation types as it
 primary extractor. Relations are discovered at runtime by the LLM (open extraction) and
 persisted here, so the vocabulary *grows* instead of being capped at a fixed enum.
 
-`agi.entities.RELATION_VERBS` is only the OFFLINE fallback seed — it bootstraps this
-table (`source='seed'`) so the deterministic heuristic has a starting vocabulary, but any
-relation the LLM emits (online) or the heuristic matches (offline) is recorded with
+`agi.entities.RELATION_VERBS` (a closed verb dictionary) was removed. The vocabulary is
+now seeded only from caller-provided relations (e.g. the reasoning-rule axioms) and
+otherwise grows purely from relations the LLM discovers at runtime, recorded here with
 `source='extracted'/'inferred'` and counted. This matches the field consensus
 (Graphiti/Zep, Mem0, Letta) where relation names are free-form and the edge-type set
 evolves with the data.
@@ -57,14 +57,13 @@ async def known_relations(user_id: str) -> Set[str]:
         return set()
 
 
-async def seed_default_relations(user_id: str, verbs: dict, rule_relations: Optional[List[str]] = None) -> None:
-    """Bootstrap the vocabulary table from the offline fallback seed (RELATION_VERBS)
-    and the reasoning-rule relations. Idempotent (ON CONFLICT DO NOTHING semantics via
-    the PK + usage_count bump is harmless)."""
-    from agi.entities import RELATION_VERBS
-    seed_rels = set(RELATION_VERBS.values())
-    if rule_relations:
-        seed_rels.update(rule_relations)
+async def seed_default_relations(user_id: str, rule_relations: Optional[List[str]] = None) -> None:
+    """Optionally bootstrap the vocabulary from a caller-provided set of relations
+    (e.g. the reasoning-rule relations). There is NO hard-coded verb list: the
+    vocabulary is meant to grow from relations the LLM actually discovers. If no
+    relations are supplied, this is a no-op and the set starts empty.
+    """
+    seed_rels = set(rule_relations or [])
     for rel in sorted(seed_rels):
         try:
             async with DatabasePool.acquire() as conn:

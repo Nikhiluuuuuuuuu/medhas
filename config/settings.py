@@ -28,22 +28,16 @@ class Settings(BaseSettings):
     
     # LLM Settings (Groq)
     GROQ_API_KEY: str = ""
-    # OFFLINE_MODE: when True, GroqLLMProvider.chat_completion fails fast instead of
-    # calling the network, so every downstream offline fallback (decision matrix,
-    # graph extraction, date extraction, anaphora, consolidation) engages. This makes
-    # the whole engine deterministic and dependency-free for tests/CI and for
-    # deployments that only need the retrieval/bookkeeping path. Set via env
-    # MEDHAS_OFFLINE=1. The memory path (embedding + pgvector + rerank) never uses
-    # the LLM, so recall quality is unaffected offline.
-    OFFLINE_MODE: bool = False
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_FAST_MODEL: str = "llama-3.1-8b-instant"
     GROQ_TEMPERATURE: float = 0.1
     GROQ_MAX_TOKENS: int = 2048
 
-    # OFFLINE_MODE can also be toggled purely by env (no .env edit needed):
-    #   MEDHAS_OFFLINE=1  -> OFFLINE_MODE True
-    # Evaluated after pydantic SettingsConfigDict has loaded .env (below).
+    # MEDHAS_OFFLINE / OFFLINE_MODE has been removed: the system requires a working LLM
+    # provider (Groq) for extraction, resolution, date parsing, and consolidation. There
+    # is no offline mode. Relation extraction in particular uses open LLM-driven
+    # extraction (no hard-coded vocabulary); if the LLM call fails, callers degrade
+    # gracefully (store the raw turn) rather than fabricating hard-coded graph edges.
 
     
     # Embedding Model Settings
@@ -89,13 +83,6 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
-# Allow MEDHAS_OFFLINE=1 (or any truthy) to force deterministic offline mode without
-# editing .env. The project's convention: verify the memory path against real Postgres,
-# never mocks — offline mode uses the REAL DB + REAL embeddings + REAL fallbacks.
-import os as _os
-if _os.environ.get("MEDHAS_OFFLINE", "").strip() in ("1", "true", "True", "yes"):
-    settings.OFFLINE_MODE = True
 
 
 def validate_settings() -> None:

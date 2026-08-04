@@ -73,26 +73,13 @@ async def run_dream_cycle(user_id: str) -> Dict[str, Any]:
                     response = await dream_llm.chat_completion(messages, temperature=0.2)
                     raw = response.get("content", "").strip()
                 except Exception as llm_err:
-                    # OFFLINE_MODE / LLM unavailable: skip the synthesis phases (reflections,
-                    # patterns, graph edges) but still run the non-LLM consolidation work
-                    # (embedding refresh + orphan detection) and return success. The memory
-                    # still "sleeps" — it just doesn't synthesize new insights without an LLM.
-                    log_error(f"Dream cycle synthesis skipped (LLM unavailable: {llm_err}); "
-                              f"running offline consolidation only.")
-                    reflections = []
-                    edges = []
-                    patterns = []
-                    embed_refreshed = await _dream_embed_refresh(user_id)
-                    orphans = await _dream_orphan_count(user_id)
-                    return {
-                        "status": "success",
-                        "offline": True,
-                        "reflections": reflections,
-                        "patterns": patterns,
-                        "graph_edges_created": 0,
-                        "embed_refreshed": embed_refreshed,
-                        "orphans_detected": int(orphans),
-                    }
+                    # No offline synthesis path: the dream cycle requires the LLM to
+                    # synthesize reflections/patterns/graph edges. Propagate so the caller
+                    # (consolidate) can degrade gracefully (log + return the non-LLM
+                    # consolidation it already performed) instead of fabricating insights.
+                    raise RuntimeError(
+                        f"Dream cycle synthesis requires the LLM (unavailable: {llm_err})"
+                    ) from llm_err
 
                 reflections = []
                 edges = []

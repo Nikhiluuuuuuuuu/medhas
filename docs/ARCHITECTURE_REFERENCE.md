@@ -7,7 +7,7 @@
 > Every claim is cited to a file in the cloned repos under `~/research/`. The
 > "Medhas status" column is verified against the code in this repo as of the
 > date above (not aspirational). The test suite (`tests/test_memory.py`) is the
-> source of truth: **64 passed, 1 skipped** at time of writing (offline mode; with Groq
+> source of truth: **82 tests** at time of writing, run against live Groq (online-only;
 > available the full 65-test suite runs and multi-hop LLM-bridging tests execute too).
 
 ---
@@ -216,7 +216,7 @@ cd ~/medhas
 . ~/.venv-medhas/bin/activate
 # unit + integration (uses medhas_test DB; GROQ_API_KEY in .env for LLM paths)
 PGPASSWORD=agent_password POSTGRES_DB=medhas_test python -m pytest tests/ -q
-# expected: 64 passed, 1 skipped (offline: MEDHAS_OFFLINE=1); 65 with Groq available
+# expected: 82 tests run against live Groq (online-only; MEDHAS_OFFLINE removed)
 ```
 Live Groq path can be exercised with:
 ```python

@@ -1,7 +1,8 @@
 """Cognition subsystem tests — prove perception, reasoning, generalization, embodiment work.
 
-Runs against the live medhas_test Postgres. Offline-safe (MEDHAS_OFFLINE=1): every stage
-uses deterministic logic, no LLM. Each test cleans up its own user_id.
+Runs against the live medhas_test Postgres. ONLINE: every LLM-backed stage (extraction,
+resolution, date parsing, dream synthesis) uses the real Groq provider — there is no
+offline mode. Each test cleans up its own user_id.
 """
 
 import os
@@ -146,19 +147,24 @@ async def test_relation_vocabulary_grows_not_hardcoded():
     from agi.cognition.schema_evolution import (
         record_relation, known_relations, seed_default_relations,
     )
-    from agi.entities import RELATION_VERBS
+    from agi.cognition.reasoning import default_rules
     uid = _uid()
     try:
         await initialize_schema()
-        # 1. Seed boots the vocabulary from the offline fallback list (RELATION_VERBS),
-        #    but the seed is NOT the ceiling — it is just the starting point.
-        await seed_default_relations(uid, RELATION_VERBS)
+        # 1. Seed boots the vocabulary from the reasoning-rule relations (legitimate
+        #    inference axioms, NOT a hard-coded extraction enum). The seed is NOT the
+        #    ceiling — it is just a starting point.
+        rule_rels = sorted({r.head[1] for r in default_rules() if r.head[1]})
+        await seed_default_relations(uid, rule_relations=rule_rels)
         known = await known_relations(uid)
-        assert "MENTORS" in known and "WORKS_AT" in known, known
+        # Seeded relations are the rule HEADS (e.g. MENTORS, CREATED, AFFILIATED_WITH,
+        # BASED_IN, SHIPS) — note WORKS_AT is a rule *premise*, not a head, so it is
+        # correctly absent from the seed. Assert on a real seeded head instead.
+        assert "MENTORS" in known and "CREATED" in known, known
 
-        # 2. A NOVEL relation (not in RELATION_VERBS) gets recorded when discovered.
+        # 2. A NOVEL relation (not in the seed) gets recorded when discovered.
         #    This proves the set grows at runtime instead of being frozen.
-        assert "ACQUIRED" not in set(RELATION_VERBS.values())
+        assert "ACQUIRED" not in known
         await record_relation(uid, "acquired", source="extracted")
         known2 = await known_relations(uid)
         assert "ACQUIRED" in known2, known2
@@ -182,10 +188,10 @@ async def test_relation_vocabulary_grows_not_hardcoded():
         await _cleanup(uid)
 
 
-async def test_extract_graph_open_records_relations_offline():
-    # Offline path: extract_graph_open falls back to the heuristic, but still records
-    # each discovered relation into the evolving vocabulary (so the set grows even
-    # without an LLM). Proves the hard-coded RELATION_VERBS is a seed, not a ceiling.
+async def test_extract_graph_open_records_relations_online():
+    # Online path: the LLM emits relations (no closed vocabulary) and each discovered
+    # relation is recorded into the evolving relation_types vocabulary. Proves extraction
+    # is open / LLM-driven, not a frozen hard-coded list.
     from agi.llm_extract import extract_graph_open
     uid = _uid()
     try:

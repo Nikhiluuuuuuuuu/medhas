@@ -20,11 +20,11 @@ import pytest_asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Force the test database + deterministic offline mode before importing the app
-# config so every LLM-backed path exercises its REAL offline fallback instead of
-# (a) hammering Groq (rate-limited, ~30s/call) and (b) hanging the suite.
+# Point the suite at the dedicated test database so it never touches dev data.
+# The suite now runs ONLINE (no MEDHAS_OFFLINE): every LLM-backed path exercises the
+# real Groq provider, matching production. A valid GROQ_API_KEY must be present in the
+# environment / .env for the LLM-dependent tests to pass.
 os.environ.setdefault("POSTGRES_DB", "medhas_test")
-os.environ.setdefault("MEDHAS_OFFLINE", "1")
 os.environ.setdefault("GROQ_API_KEY", "test_key_placeholder")
 
 from infrastructure.db import DatabasePool, initialize_schema  # noqa: E402

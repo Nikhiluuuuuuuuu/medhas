@@ -170,7 +170,7 @@ TABLES = [
     "CREATE INDEX IF NOT EXISTS idx_body_effects_user_action ON body_effects(user_id, action);",
     # Open-relation vocabulary (schema evolution): the set of relation types is NOT
     # hard-coded — it is learned and persisted here as extraction discovers new
-    # relations. RELATION_VERBS merely seeds this table as a fallback vocabulary.
+    # relations via the LLM. Seeding (if any) comes from reasoning axioms, not a verb list.
     """
     CREATE TABLE IF NOT EXISTS relation_types (
         user_id    TEXT NOT NULL,

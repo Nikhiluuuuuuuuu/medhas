@@ -1,16 +1,16 @@
 """Open (non-keyword) extraction + resolution for graph memory.
 
-Replaces the brittle heuristic keyword lists (RELATION_VERBS, capitalization-only
-NER, "the company that"/"he" pattern matching, hardcoded promotion verbs) with
-LLM-based open extraction. The model is asked to emit *any* (subject, relationship,
-object) triples it can find, plus entity types, regardless of wording. No closed
-vocabulary — new relations, lowercase names, and novel phrasings are handled.
+LLM-driven open extraction: the model emits *any* (subject, relationship, object)
+triples it can find, plus entity types, regardless of wording. There is NO closed
+vocabulary and NO hard-coded relation list — new relations, lowercase names, and novel
+phrasings are all handled by the model. Each discovered relation is recorded into the
+evolving `relation_types` vocabulary (agi.cognition.schema_evolution) so the edge-type
+set grows with the data rather than being capped by a frozen enum.
 
-The project's existing GroqLLMProvider (already used by evolve_memory_network for
-augmentation) is reused, so there are no new dependencies or mock data.
-
-If the LLM call fails for any reason, we transparently fall back to the dependency-free
-heuristic extractor (agi.entities) so the system still works offline / without a key.
+This module requires a working LLM provider (Groq). If the LLM call fails for any
+reason, the functions return empty results (no relation triples invented) so callers
+can degrade gracefully (e.g. store the raw turn as an atomic fact) instead of silently
+fabricating hard-coded graph edges.
 """
 
 from typing import Dict, List, Tuple, Optional, Any
@@ -94,8 +94,9 @@ async def extract_graph_open(
     relationship string, and each discovered relation is recorded into the evolving
     `relation_types` vocabulary (schema evolution) when ``user_id`` is provided.
 
-    Falls back to the heuristic extractor (agi.entities, seeded by RELATION_VERBS) on
-    any failure — that fallback also records its relations so the vocabulary still grows.
+    Requires a working LLM provider. On any LLM failure the function returns empty
+    results (no relation triples invented) so callers can degrade gracefully (e.g. store
+    the raw turn as an atomic fact) instead of fabricating hard-coded graph edges.
     """
     async with measure_latency("agi.llm_extract.extract_graph_open"):
         # Vocabulary hint: let the LLM reuse existing relations where semantically apt,
@@ -142,37 +143,10 @@ async def extract_graph_open(
                 return triples, ents
             raise ValueError("no triples/entities produced")
         except Exception as e:
-            log_error(f"llm_extract skipped, using heuristic: {e}")
-            from agi.entities import extract_relations, extract_entities
-            triples = extract_relations(fact_text)
-            # Fallback entity typing: capitalized names default to PERSON (a universal
-            # convention, not a keyword list) so pronoun/anaphora resolution still works
-            # when the LLM is unavailable. ORG/PLACE/PRODUCT are only assumed when the
-            # token itself is clearly one of those (kept minimal, no verb/relation keywords).
-            # Entities discovered via relation triples (subjects/objects) are ALSO included
-            # even when lowercase (e.g. 'priya'), so open extraction stays dependency-free.
-            ents = []
-            seen = set()
-            for n in extract_entities(fact_text):
-                seen.add(n.lower())
-                t = "PERSON"
-                low = n.lower()
-                if any(k in low for k in ("corp", "inc", "ltd", "company", "ai ")):
-                    t = "ORG"
-                elif any(k in low for k in ("city", "town", "state", "country")):
-                    t = "PLACE"
-                ents.append({"name": n, "type": t})
-            for s, _r, o in triples:
-                for cand in (s, o):
-                    if cand.lower() not in seen and not cand.isdigit():
-                        seen.add(cand.lower())
-                        ents.append({"name": cand, "type": "ENTITY"})
-            # Even the offline fallback records its relations -> vocabulary still grows.
-            if user_id:
-                from agi.cognition.schema_evolution import record_relation
-                for _s, r, _o in triples:
-                    await record_relation(user_id, r, source="extracted")
-            return triples, ents
+            # No hard-coded fallback: return empty results, never invent graph edges.
+            # Callers (async_extractor / graph_build) degrade by storing the raw turn.
+            log_error(f"extract_graph_open LLM failed, returning empty (no fallback invent): {e}")
+            return [], []
 
 
 async def extract_date_open(fact_text: str) -> Optional[datetime]:
@@ -250,7 +224,9 @@ def _regex_date_or_relative(fact_text: str) -> Optional[datetime]:
 async def resolve_entities_open(query: str, known_entities: List[str]) -> List[str]:
     """LLM-based anaphora/coreference resolution against known graph entities.
 
-    Falls back to capitalized-token extraction on failure."""
+    On LLM failure, degrades to capitalized-token matching against the query plus
+    containment in the known-entity set (no hard-coded relation words invented).
+    """
     async with measure_latency("agi.llm_extract.resolve_entities_open"):
         try:
             if not known_entities:
@@ -264,11 +240,11 @@ async def resolve_entities_open(query: str, known_entities: List[str]) -> List[s
                 return [str(x).strip() for x in data["entities"] if x]
             raise ValueError("no resolution produced")
         except Exception as e:
-            log_error(f"llm_resolve skipped, using heuristic: {e}")
+            log_error(f"llm_resolve failed, using capitalized-token fallback: {e}")
             from agi.entities import query_entities
-            # Offline resolution: (1) direct capitalized entities in the query, then
+            # Graceful degradation: (1) direct capitalized entities in the query, then
             # (2) match against the provided known_entities by word/lowercase containment
-            # so lowercase known names (e.g. 'priya') still resolve without an LLM.
+            # so lowercase known names (e.g. 'priya') still resolve without the LLM.
             resolved = list(query_entities(query))
             ql = query.lower()
             for name in known_entities:

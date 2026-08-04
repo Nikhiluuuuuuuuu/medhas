@@ -4,8 +4,8 @@ Guards against the 2026-08-04 latent bug where consolidate/forget_user/backup/
 build_profile/plan_intention/fire_intentions were nested INSIDE _result_dict (after
 its return) and therefore never became class methods. Also guards engine.think().
 
-Runs offline (MEDHAS_OFFLINE=1): every method exercises its real Postgres path with
-deterministic fallbacks, no Groq required. Uses the session-scoped `user_id` fixture.
+Runs ONLINE against the real Postgres path with the live Groq provider (no offline
+mode). Uses the session-scoped `user_id` fixture.
 """
 
 import os

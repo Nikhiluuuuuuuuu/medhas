@@ -22,22 +22,20 @@ A production-grade, ultra-low-latency local AI agent memory engine built in **Py
 
 ---
 
-## Offline / self-contained mode
+## Online-only (requires Groq)
 
-The memory engine runs **without any LLM**. Set `MEDHAS_OFFLINE=1` (or `OFFLINE_MODE=true`
-in `.env`) and every LLM-backed step transparently uses its deterministic, dependency-free
-fallback: heuristic relation/entity extraction, regex date anchoring, raw-fact capture, and
-offline dream-cycle consolidation (embedding refresh + orphan detection). The retrieval path
-(embeddings + pgvector + rerank) never calls the LLM, so recall quality is unchanged. This
-makes the suite green in CI with no network and lets deployments run fully self-contained.
+The engine is **online-only**: relation/edge extraction, entity resolution, date parsing,
+and dream-cycle consolidation all call the LLM (Groq `llama-3.3-70b-versatile`). There is
+**no offline mode** (`MEDHAS_OFFLINE` / `OFFLINE_MODE` have been removed). Relation
+extraction is **open / LLM-driven** — the model emits any relation string and each one is
+recorded into the evolving `relation_types` vocabulary, so there is no frozen hard-coded
+relation list. If an LLM call fails (e.g. network/429), callers degrade gracefully
+(store the raw turn as an atomic fact; return empty graph edges) rather than fabricating
+hard-coded edges. A valid `GROQ_API_KEY` is required.
 
 ```bash
-export MEDHAS_OFFLINE=1
-POSTGRES_DB=medhas_test python -m pytest tests/ -q   # 80 passed, 1 skipped (LLM-bridging)
+POSTGRES_DB=medhas_test python -m pytest tests/ -q   # runs against live Groq
 ```
-
-The only test skipped offline is the one that needs LLM coreference bridging
-("the product that makes solar panels" → lumina → priya); it runs when Groq is available.
 
 ## Cognition subsystem (`agi/cognition/`)
 

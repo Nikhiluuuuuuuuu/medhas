@@ -72,9 +72,9 @@ async def extract_and_persist_background(
                 response = await extractor_llm.chat_completion(messages, temperature=0.0)
                 raw_content = (response.get("content", "") or "").strip()
             except Exception as llm_err:
-                # LLM unavailable (OFFLINE_MODE or network/429 failure). Fall back to
-                # storing the raw turn as a single atomic fact so capture() still persists
-                # the experience — no data loss, no LLM dependency.
+                # LLM call failed (e.g. network/429). Degrade gracefully by storing the
+                # raw turn as a single atomic fact so capture() still persists the
+                # experience — no data loss. No hard-coded extraction is performed.
                 await atomic_mem.insert_fact(
                     user_id, user_message, session_id=session_id, agent_id=agent_id
                 )
