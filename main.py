@@ -150,5 +150,9 @@ async def run_production_test_suite():
     await DatabasePool.close()
     console.print("\n[bold green]⚡ ALL BUGS RESOLVED & VERIFIED SUCCESSFULLY (AUTHENTIC 10/10 SCORE)![/bold green]")
 
-if __name__ == "__main__":
+def main() -> None:
+    """Console-script entry point (``medhas-test``)."""
     asyncio.run(run_production_test_suite())
+
+if __name__ == "__main__":
+    main()

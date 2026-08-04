@@ -1,0 +1,31 @@
+# Build / test artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+wheels/
+
+# Virtualenvs
+.venv/
+venv/
+.env
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+logs/
+
+# Local data / editor
+*.db
+*.sqlite3
+.DS_Store
+.idea/
+.vscode/
+.git/
+.github/
+
+# Docs build
+docs/_build/

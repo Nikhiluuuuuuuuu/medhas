@@ -122,6 +122,16 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
-if __name__ == "__main__":
+@app.get("/health", tags=["ops"])
+async def health() -> Dict[str, Any]:
+    """Liveness/readiness probe used by the Docker HEALTHCHECK and orchestrators."""
+    return {"status": "ok", "service": "medhas", "version": app.version}
+
+
+def main() -> None:
+    """Console-script entry point (``medhas-server``)."""
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)
+
+if __name__ == "__main__":
+    main()
 
