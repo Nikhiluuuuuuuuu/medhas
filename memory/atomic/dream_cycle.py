@@ -69,8 +69,30 @@ async def run_dream_cycle(user_id: str) -> Dict[str, Any]:
                     {"role": "system", "content": DREAM_CYCLE_PROMPT},
                     {"role": "user", "content": f"Recent facts:\n{facts_summary}"}
                 ]
-                response = await dream_llm.chat_completion(messages, temperature=0.2)
-                raw = response.get("content", "").strip()
+                try:
+                    response = await dream_llm.chat_completion(messages, temperature=0.2)
+                    raw = response.get("content", "").strip()
+                except Exception as llm_err:
+                    # OFFLINE_MODE / LLM unavailable: skip the synthesis phases (reflections,
+                    # patterns, graph edges) but still run the non-LLM consolidation work
+                    # (embedding refresh + orphan detection) and return success. The memory
+                    # still "sleeps" — it just doesn't synthesize new insights without an LLM.
+                    log_error(f"Dream cycle synthesis skipped (LLM unavailable: {llm_err}); "
+                              f"running offline consolidation only.")
+                    reflections = []
+                    edges = []
+                    patterns = []
+                    embed_refreshed = await _dream_embed_refresh(user_id)
+                    orphans = await _dream_orphan_count(user_id)
+                    return {
+                        "status": "success",
+                        "offline": True,
+                        "reflections": reflections,
+                        "patterns": patterns,
+                        "graph_edges_created": 0,
+                        "embed_refreshed": embed_refreshed,
+                        "orphans_detected": int(orphans),
+                    }
 
                 reflections = []
                 edges = []
@@ -171,39 +193,10 @@ async def run_dream_cycle(user_id: str) -> Dict[str, Any]:
                     log_error(f"Dream cycle patterns phase skipped: {pe}")
 
                 # 4. (NEW) Embedding refresh: backfill any atomic facts missing an embedding.
-                embed_refreshed = 0
-                try:
-                    async with DatabasePool.acquire() as conn:
-                        missing = await conn.fetch(
-                            "SELECT id, fact_text FROM atomic_facts WHERE user_id=$1 AND is_active=TRUE AND embedding IS NULL LIMIT 50;",
-                            user_id,
-                        )
-                        for m in missing:
-                            try:
-                                emb = await embedder.embed_text(m["fact_text"])
-                                vec = f"[{','.join(str(x) for x in emb)}]"
-                                await conn.execute("UPDATE atomic_facts SET embedding=$2::vector WHERE id=$1", m["id"], vec)
-                                embed_refreshed += 1
-                            except Exception:
-                                pass
-                except Exception as ee:
-                    log_error(f"Dream cycle embed-refresh skipped: {ee}")
+                embed_refreshed = await _dream_embed_refresh(user_id)
 
                 # 5. (NEW) Orphan detection: active facts never retrieved/referenced recently.
-                orphans = 0
-                try:
-                    async with DatabasePool.acquire() as conn:
-                        orphans = await conn.fetchval(
-                            """
-                            SELECT count(*) FROM atomic_facts
-                            WHERE user_id=$1 AND is_active=TRUE
-                              AND created_at < NOW() - INTERVAL '30 days'
-                              AND importance_score <= 2.0;
-                            """,
-                            user_id,
-                        ) or 0
-                except Exception as oe:
-                    log_error(f"Dream cycle orphan detection skipped: {oe}")
+                orphans = await _dream_orphan_count(user_id)
 
                 log_atomic(f"🌙 [DREAM CYCLE] reflections={len(reflections)} patterns={len(patterns)} "
                            f"embed_refreshed={embed_refreshed} orphans={orphans}")
@@ -220,4 +213,44 @@ async def run_dream_cycle(user_id: str) -> Dict[str, Any]:
         except Exception as e:
             log_error(f"Dream cycle consolidation error: {e}")
             return {"status": "error", "message": str(e)}
+
+
+async def _dream_embed_refresh(user_id: str) -> int:
+    """Backfill any atomic facts missing an embedding (offline-safe, no LLM)."""
+    embed_refreshed = 0
+    try:
+        async with DatabasePool.acquire() as conn:
+            missing = await conn.fetch(
+                "SELECT id, fact_text FROM atomic_facts WHERE user_id=$1 AND is_active=TRUE AND embedding IS NULL LIMIT 50;",
+                user_id,
+            )
+            for m in missing:
+                try:
+                    emb = await embedder.embed_text(m["fact_text"])
+                    vec = f"[{','.join(str(x) for x in emb)}]"
+                    await conn.execute("UPDATE atomic_facts SET embedding=$2::vector WHERE id=$1", m["id"], vec)
+                    embed_refreshed += 1
+                except Exception:
+                    pass
+    except Exception as ee:
+        log_error(f"Dream cycle embed-refresh skipped: {ee}")
+    return embed_refreshed
+
+
+async def _dream_orphan_count(user_id: str) -> int:
+    """Count dormant low-importance facts (offline-safe, no LLM)."""
+    try:
+        async with DatabasePool.acquire() as conn:
+            return int(await conn.fetchval(
+                """
+                SELECT count(*) FROM atomic_facts
+                WHERE user_id=$1 AND is_active=TRUE
+                  AND created_at < NOW() - INTERVAL '30 days'
+                  AND importance_score <= 2.0;
+                """,
+                user_id,
+            ) or 0)
+    except Exception as oe:
+        log_error(f"Dream cycle orphan detection skipped: {oe}")
+        return 0
 

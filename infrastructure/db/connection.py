@@ -14,7 +14,30 @@ class DatabasePool:
 
     @classmethod
     async def initialize(cls) -> None:
-        """Initialize the connection pool with optimized settings."""
+        """Initialize the connection pool with optimized settings.
+
+        Idempotent and loop-safe: if the process previously created a pool bound to a
+        CLOSED event loop (e.g. a prior pytest session, or pytest-asyncio re-creating the
+        loop), it is discarded and rebuilt on the current loop. This prevents the
+        "pool attached to a different loop" / "connection was closed" failures that occur
+        when a singleton asyncpg pool outlives the event loop that created it.
+        """
+        import asyncio
+        try:
+            cur_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            cur_loop = None
+        if cls._pool is not None:
+            # If the existing pool is bound to a dead/foreign loop, drop it so we rebuild.
+            bound_loop = getattr(cls._pool, "_loop", None)
+            if bound_loop is None or bound_loop.is_closed() or (
+                cur_loop is not None and bound_loop is not cur_loop
+            ):
+                try:
+                    await cls._pool.close()
+                except Exception:
+                    pass
+                cls._pool = None
         if cls._pool is None:
             try:
                 async with measure_latency("DatabasePool.initialize"):
@@ -23,7 +46,7 @@ class DatabasePool:
                         min_size=settings.DB_POOL_MIN_SIZE,
                         max_size=settings.DB_POOL_MAX_SIZE,
                         timeout=settings.DB_POOL_TIMEOUT,
-                        command_timeout=60.0
+                        command_timeout=60.0,
                     )
                 logger.info("✅ PostgreSQL connection pool initialized successfully.")
             except Exception as e:

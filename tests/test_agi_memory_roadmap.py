@@ -21,9 +21,8 @@ UID = "agi_test_user"
 
 @pytest_asyncio.fixture(autouse=True)
 async def _db():
-    os.environ.setdefault("POSTGRES_DB", "medhas_test")
-    await DatabasePool.initialize()
-    await initialize_schema()
+    # Pool + schema are session-scoped (conftest.py). This fixture only cleans the
+    # shared user_id between tests so cases stay isolated without re-running DDL.
     yield
     async with DatabasePool.acquire() as conn:
         await conn.execute("DELETE FROM atomic_facts WHERE user_id = $1;", UID)
@@ -33,7 +32,6 @@ async def _db():
         await conn.execute("DELETE FROM percept_buffer WHERE user_id = $1;", UID)
         await conn.execute("DELETE FROM eval_runs WHERE user_id = $1;", UID)
         await conn.execute("DELETE FROM memory_events WHERE user_id = $1;", UID)
-    await DatabasePool.close()
 
 
 def test_memory_type_routing():

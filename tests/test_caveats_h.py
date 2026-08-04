@@ -21,14 +21,6 @@ from utils.dates import extract_fact_date
 from agi.anaphora import resolve_query_entities, _most_salient_person
 
 
-@pytest.fixture(scope="function", autouse=True)
-async def _db():
-    await DatabasePool.initialize()
-    await initialize_schema()
-    yield
-    await DatabasePool.close()
-
-
 async def _cleanup(uid: str):
     async with DatabasePool.acquire() as conn:
         await conn.execute("DELETE FROM atomic_facts WHERE user_id=$1", uid)

@@ -70,6 +70,7 @@ from agi.prospective import (
     add_intention, check_cues, complete_intention, list_intentions,
 )
 from agi.metamemory import assess as metamemory_assess, known_unknowns, knowledge_map
+from agi.cognition.embodiment import BodyModel  # cognition subsystem (forward-ref in think())
 from agi.sensory import buffer_percept, promote_percepts, sweep_expired, list_buffer, attention_filter
 
 # ingest / chunking / extraction (E4)
@@ -194,13 +195,22 @@ class MemoryEngine:
             # --- E10/E12 contradiction handling
             for c in candidates:
                 ct = str(getattr(c, "fact_text", "")).lower()
-                if ct and ct != text.lower() and self._contradicts(text, ct):
+                if ct and ct != text.lower() and await self._contradicts_semantic(text, ct):
                     await mark_contradiction(fact_id, c.id)
                     # lower the older fact's belief (Bayesian contradiction)
                     await revise_fact_belief(c.id, likelihood=0.6, supports=False)
-                    # supersede the older fact: close its valid-time window so it is
-                    # excluded from "what is true now" while staying queryable historically
-                    # (Zep/Graphiti temporal-invalidation pattern — coexist, don't delete).
+                    # supersede the older fact: close its valid-time window AND soft-deactivate
+                    # so it is excluded from "what is true now" while staying queryable
+                    # historically (Zep/Graphiti temporal-invalidation pattern — coexist, don't delete).
+                    try:
+                        from infrastructure.db import DatabasePool
+                        async with DatabasePool.acquire() as conn:
+                            await conn.execute(
+                                "UPDATE atomic_facts SET is_active = FALSE WHERE id = $1;",
+                                c.id,
+                            )
+                    except Exception as deact_err:
+                        log_error(f"contradiction deactivate skipped: {deact_err}")
                     try:
                         await invalidate_fact(c.id, invalidated_by=fact_id)
                     except Exception as e:
@@ -245,7 +255,7 @@ class MemoryEngine:
 
     @staticmethod
     def _contradicts(a: str, b: str) -> bool:
-        # lightweight lexical opposition signal (LLM-grade handled in evolve step)
+        # Lightweight lexical opposition signal (e.g. "is" vs "is not").
         neg_patterns = (("is", "is not"), ("has", "has no"), ("always", "never"),
                         ("can", "cannot"), ("do", "do not"), ("will", "will not"))
         al, bl = a.lower(), b.lower()
@@ -253,6 +263,57 @@ class MemoryEngine:
             if (p in al and n in bl) or (n in al and p in bl):
                 return True
         return False
+
+    @staticmethod
+    async def _contradicts_semantic(a: str, b: str) -> bool:
+        """Semantic contradiction detection (offline, local embeddings).
+
+        Two facts contradict when they assert different things about the SAME
+        subject+relation, e.g. "Nikhil lives in Bangalore" vs "Nikhil lives in
+        Hyderabad" (both are LIVES_IN, different objects) — these are mutually
+        exclusive regardless of how lexically similar the sentences are. This mirrors
+        human contradiction detection ("he can't live in both cities") and works
+        WITHOUT an LLM call: it uses local FastEmbed embeddings + a structural check
+        on shared relation verbs.
+
+        Returns True when:
+          (1) the two facts share a salient subject entity AND a relation verb but the
+              objects differ (structural contradiction), OR
+          (2) lexical negation (is/is not) is present, OR
+          (3) same subject but embedding cosine < 0.45 (semantically divergent).
+        """
+        # Fast lexical negation gate.
+        if MemoryEngine._contradicts(a, b):
+            return True
+        # Structural contradiction: same relation verb, different objects, shared subject.
+        al, bl = a.lower(), b.lower()
+        for verb in ("lives in", "lived in", "live in", "works at", "works for",
+                     "prefers", "is", "was", "are", "were", "joined", "mentors",
+                     "located in", "based in", "founded", "launched", "headquarters"):
+            if verb in al and verb in bl:
+                sub_a = al.split(verb)[0].strip()
+                sub_b = bl.split(verb)[0].strip()
+                obj_a = al.split(verb)[1].strip()
+                obj_b = bl.split(verb)[1].strip()
+                # shared subject (entity), different object -> contradiction
+                if sub_a and sub_a == sub_b and obj_a and obj_b and obj_a != obj_b:
+                    return True
+        # Embedding-based divergence on a shared subject (catch-all).
+        try:
+            from agi.entities import query_entities
+            ea, eb = set(e.lower() for e in query_entities(a)), set(e.lower() for e in query_entities(b))
+            shared = ea & eb
+            if not shared:
+                return False
+            from infrastructure.llm import FastEmbeddingProvider
+            emb = FastEmbeddingProvider()
+            va, vb = await emb.embed_text(a), await emb.embed_text(b)
+            sim = sum(x * y for x, y in zip(va, vb)) / (
+                (sum(x * x for x in va) ** 0.5) * (sum(y * y for y in vb) ** 0.5) + 1e-9
+            )
+            return sim < 0.45
+        except Exception:
+            return False
 
     # ============================================================= RECALL (read)
 
@@ -417,23 +478,41 @@ class MemoryEngine:
             }
 
 
-def _result_dict(h) -> dict:
-    """Serialize a recall hit to a plain dict, tolerant of the lightweight
-    type('Row', (), {...})() wrapper used for temporal/multihop results (whose
-    data lives in the class namespace, not the instance __dict__)."""
-    d = getattr(h, "__dict__", None)
-    if isinstance(d, dict) and d:
-        return dict(d)
-    out = {}
-    for k in ("id", "fact_text", "memory_type", "belief_confidence",
-              "valid_from", "valid_to", "created_at", "similarity", "rrf_score",
-              "invalidated_by", "provenance_kind", "source_episode_id",
-              "contradicted_by"):
-        if hasattr(h, k):
-            out[k] = getattr(h, k)
-    if "fact_text" not in out and hasattr(h, "fact_text"):
-        out["fact_text"] = h.fact_text
-    return out or {"fact_text": getattr(h, "fact_text", "")}
+    async def think(self, text: str, user_id: str, *, modality: str = "text",
+                    body: Optional["BodyModel"] = None, action: Optional[str] = None,
+                    action_params: Optional[dict] = None) -> Dict[str, Any]:
+        """Cognition entry point: run the perception->reasoning->generalization->embodiment
+        pipeline over one input. Returns the structured CognitiveResult plus ingestion hints.
+
+        This is the thin loop that turns the memory engine into a cognitive agent. Offline-safe.
+        """
+        from agi.cognition import cognitive_step
+        result = await cognitive_step(
+            text, user_id, modality=modality, body=body,
+            action=action, action_params=action_params,
+        )
+        # Optionally persist the perceived fact so downstream recall sees it.
+        try:
+            fact_text = result.percept.to_fact_text() if result.percept else text
+            if fact_text:
+                await self.remember(user_id, fact_text, source="cognitive")
+        except Exception as e:
+            result.notes.append(f"think ingest skipped: {e}")
+        derived = [{"subject": s, "relationship": r, "object": o} for s, r, o in result.derived_facts]
+        return {
+            "percept": {
+                "modality": result.percept.modality,
+                "salience": result.percept.salience,
+                "scene_type": result.percept.scene_type,
+                "entities": result.percept.entities,
+                "relations": [list(t) for t in result.percept.relations],
+            } if result.percept else None,
+            "derived_facts": derived,
+            "schema_predictions": result.schema_predictions,
+            "analogies": [list(t) for t in result.analogies],
+            "action": result.action,
+            "notes": result.notes,
+        }
 
     # --------------------------------------------------------- meta operations
 
@@ -457,6 +536,24 @@ def _result_dict(h) -> dict:
 
     async def fire_intentions(self, user_id: str, context: str = "") -> List[Dict[str, Any]]:
         return await check_cues(user_id, context)
+
+def _result_dict(h) -> dict:
+    """Serialize a recall hit to a plain dict, tolerant of the lightweight
+    type('Row', (), {...})() wrapper used for temporal/multihop results (whose
+    data lives in the class namespace, not the instance __dict__)."""
+    d = getattr(h, "__dict__", None)
+    if isinstance(d, dict) and d:
+        return dict(d)
+    out = {}
+    for k in ("id", "fact_text", "memory_type", "belief_confidence",
+              "valid_from", "valid_to", "created_at", "similarity", "rrf_score",
+              "invalidated_by", "provenance_kind", "source_episode_id",
+              "contradicted_by"):
+        if hasattr(h, k):
+            out[k] = getattr(h, k)
+    if "fact_text" not in out and hasattr(h, "fact_text"):
+        out["fact_text"] = h.fact_text
+    return out or {"fact_text": getattr(h, "fact_text", "")}
 
 
 #: shared engine instance

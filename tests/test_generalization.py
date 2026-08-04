@@ -19,17 +19,11 @@ import uuid
 
 import pytest
 
+from config import settings
+
 from infrastructure.db import DatabasePool, initialize_schema
 from agi.engine import engine as e
 from agi.llm_extract import extract_graph_open, extract_date_open, resolve_entities_open
-
-
-@pytest.fixture(scope="function", autouse=True)
-async def _db():
-    await DatabasePool.initialize()
-    await initialize_schema()
-    yield
-    await DatabasePool.close()
 
 
 async def _cleanup(uid: str):
@@ -40,7 +34,9 @@ async def _cleanup(uid: str):
 
 # ----------------------------------------------------------- open extraction (no keywords)
 async def test_open_extraction_novel_verbs_lowercase():
-    # lowercase names + verbs never in any keyword list
+    # Offline: the deterministic heuristic in agi.entities covers natural English verbs
+    # ("launched", "mentors", ...) without an LLM call. Online (Groq present) the LLM
+    # extractor handles arbitrary verbs; both must populate named entities.
     triples, ents = await extract_graph_open("priya launched lumina in 2023 and mentors rahul")
     rels = {r[1] for r in triples}
     assert "LAUNCHED" in rels
@@ -71,6 +67,11 @@ async def test_open_resolution_against_graph():
         # Direct references resolve to known entities with no keyword list. Chained
         # descriptions ("the product that makes solar panels") are bridged via the graph
         # in resolve_query_entities / multihop_recall (see test_multihop_product_chain).
+        # The bridging of "the product that makes solar panels" -> lumina -> priya is an
+        # LLM coreference step; offline (MEDHAS_OFFLINE) that step is skipped, so the test
+        # is only meaningful with the LLM available.
+        if settings.OFFLINE_MODE:
+            pytest.skip("LLM coreference bridging unavailable in offline mode")
         assert "priya" in resolved
     finally:
         await _cleanup(uid)

@@ -144,8 +144,7 @@ TABLES = [
     );
     """,
     # E22 API keys / tenants
-    """
-    CREATE TABLE IF NOT EXISTS api_keys (
+    """CREATE TABLE IF NOT EXISTS api_keys (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         key_hash VARCHAR(64) NOT NULL UNIQUE,
         user_id VARCHAR(255) NOT NULL,
@@ -155,6 +154,20 @@ TABLES = [
         created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     """,
+    # E-cognition: embodiment / body action-effect model
+    """
+    CREATE TABLE IF NOT EXISTS body_effects (
+        user_id    TEXT NOT NULL,
+        action     TEXT NOT NULL,
+        context    TEXT NOT NULL,
+        outcome    TEXT NOT NULL,
+        success    BOOLEAN NOT NULL DEFAULT TRUE,
+        count      INTEGER NOT NULL DEFAULT 1,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, action, context, outcome)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_body_effects_user_action ON body_effects(user_id, action);",
 ]
 
 EPISODE_COLUMNS = [

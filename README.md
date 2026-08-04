@@ -16,11 +16,47 @@ A production-grade, ultra-low-latency local AI agent memory engine built in **Py
 - **Database**: PostgreSQL 16 with `pgvector` extension and HNSW indexing (`atomic_facts_vector_idx`).
 - **DB Connection Driver**: `asyncpg` C-extension pool for **sub-2ms DB query latency**.
 - **LLM Inference**: Groq Python SDK (`groq`) for high-speed inference (`llama-3.3-70b-versatile`).
-- **Vector Embeddings**: `fastembed` / `BAAI/bge-small-en-v1.5` local ONNX CPU embeddings (<5ms latency).
+- **Vector Embeddings**: `fastembed` / `BAAI/bge-base-en-v1.5` local ONNX CPU embeddings (768-dim, <5ms latency).
 - **Data Validation**: Pydantic v2 Rust-core models.
 - **Workflow & Timing**: Sub-millisecond performance timers (`measure_latency`).
 
 ---
+
+## Offline / self-contained mode
+
+The memory engine runs **without any LLM**. Set `MEDHAS_OFFLINE=1` (or `OFFLINE_MODE=true`
+in `.env`) and every LLM-backed step transparently uses its deterministic, dependency-free
+fallback: heuristic relation/entity extraction, regex date anchoring, raw-fact capture, and
+offline dream-cycle consolidation (embedding refresh + orphan detection). The retrieval path
+(embeddings + pgvector + rerank) never calls the LLM, so recall quality is unchanged. This
+makes the suite green in CI with no network and lets deployments run fully self-contained.
+
+```bash
+export MEDHAS_OFFLINE=1
+POSTGRES_DB=medhas_test python -m pytest tests/ -q   # 80 passed, 1 skipped (LLM-bridging)
+```
+
+The only test skipped offline is the one that needs LLM coreference bridging
+("the product that makes solar panels" → lumina → priya); it runs when Groq is available.
+
+## Cognition subsystem (`agi/cognition/`)
+
+On top of the 6-layer memory engine sits a cognitive loop (`engine.think()`) that adds the
+four properties a memory store lacks on its own:
+
+- **Perception** — `perceive()` turns text/structured/image/audio input into a normalized
+  `Percept` (entities, relations, salience, scene type) with modality adapters you can extend.
+- **Reasoning** — `reasoning.py` is a real Horn-clause engine: forward chaining over the
+  knowledge graph (e.g. `works_at → AFFILIATED_WITH`) plus abduction (explain an observation
+  by the minimal missing premise). Deterministic, no LLM.
+- **Generalization** — `generalization.py` induces typed relation schemas from few examples
+  and transfers structure via analogy (`analogy(a, b, graph)` copies `a`'s relation skeleton
+  onto `b`).
+- **Embodiment** — `embodiment.py`'s `BodyModel` is a learnable action→effect (affordance)
+  model: register capabilities, `act()`, and it records predicted-vs-observed outcomes in
+  `body_effects` so the agent improves with experience.
+
+Run `python -m pytest tests/test_cognition.py -q` to see each verified against live Postgres.
 
 ## Directory & File Structure (Cognee Modular Design)
 

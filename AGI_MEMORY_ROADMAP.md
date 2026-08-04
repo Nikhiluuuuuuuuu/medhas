@@ -9,7 +9,7 @@ extended by one include line.
 ## How to run
 ```bash
 source /home/ubuntu/.venv-medhas/bin/activate
-POSTGRES_DB=medhas_test python -m pytest tests/ -q   # 39 tests, all green
+POSTGRES_DB=medhas_test python -m pytest tests/ -q   # 64 passed, 1 skipped (offline); 65 with Groq
 uvicorn server:app --port 8000                       # new /agi/* endpoints mounted
 ```
 

@@ -120,8 +120,12 @@ async def extract_graph_open(fact_text: str) -> Tuple[List[Tuple[str, str, str]]
             # convention, not a keyword list) so pronoun/anaphora resolution still works
             # when the LLM is unavailable. ORG/PLACE/PRODUCT are only assumed when the
             # token itself is clearly one of those (kept minimal, no verb/relation keywords).
+            # Entities discovered via relation triples (subjects/objects) are ALSO included
+            # even when lowercase (e.g. 'priya'), so open extraction stays dependency-free.
             ents = []
+            seen = set()
             for n in extract_entities(fact_text):
+                seen.add(n.lower())
                 t = "PERSON"
                 low = n.lower()
                 if any(k in low for k in ("corp", "inc", "ltd", "company", "ai ")):
@@ -129,6 +133,11 @@ async def extract_graph_open(fact_text: str) -> Tuple[List[Tuple[str, str, str]]
                 elif any(k in low for k in ("city", "town", "state", "country")):
                     t = "PLACE"
                 ents.append({"name": n, "type": t})
+            for s, _r, o in triples:
+                for cand in (s, o):
+                    if cand.lower() not in seen and not cand.isdigit():
+                        seen.add(cand.lower())
+                        ents.append({"name": cand, "type": "ENTITY"})
             return triples, ents
 
 
@@ -178,6 +187,17 @@ def _regex_date_or_relative(fact_text: str) -> Optional[datetime]:
     if dt:
         return dt
     import re
+    # "before/after <event> in <YEAR>" (e.g. "lived in chennai before moving to
+    # bengaluru in 2024") -> the earlier clause gets YEAR-1 so temporal ordering
+    # works even when the earlier clause itself states no year. This is the H1 fix:
+    # relative residence/employment before a dated event must be orderable.
+    m = re.search(r"\b(before|prior to|after)\b[^.]*?\b(19|20)\d{2}\b", fact_text.lower())
+    if m:
+        direction = m.group(1)
+        year = int(re.search(r"(19|20)\d{2}", m.group(0)).group(0))
+        y = year - 1 if direction in ("before", "prior to") else year + 1
+        from datetime import datetime, timezone
+        return datetime(y, 1, 1, tzinfo=timezone.utc)
     # "before <year>" / "after <year>" with no own date -> adjacent year
     m = re.search(r"\b(before|after|prior to)\s+(\d{4})\b", fact_text.lower())
     if m:
@@ -212,7 +232,18 @@ async def resolve_entities_open(query: str, known_entities: List[str]) -> List[s
         except Exception as e:
             log_error(f"llm_resolve skipped, using heuristic: {e}")
             from agi.entities import query_entities
-            return query_entities(query)
+            # Offline resolution: (1) direct capitalized entities in the query, then
+            # (2) match against the provided known_entities by word/lowercase containment
+            # so lowercase known names (e.g. 'priya') still resolve without an LLM.
+            resolved = list(query_entities(query))
+            ql = query.lower()
+            for name in known_entities:
+                if not name:
+                    continue
+                nl = name.lower()
+                if nl in ql and name not in resolved:
+                    resolved.append(name)
+            return resolved
 
 
 __all__ = ["extract_graph_open", "extract_date_open", "resolve_entities_open"]

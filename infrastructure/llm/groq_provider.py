@@ -41,6 +41,15 @@ class GroqLLMProvider(BaseLLMProvider):
     ) -> Dict[str, Any]:
         """Execute async chat completion with automatic model fallback on 429 rate limit."""
         async with measure_latency(f"GroqLLMProvider.chat_completion ({self.model})"):
+            if settings.OFFLINE_MODE:
+                # Deterministic offline mode: do NOT touch the network. Raise so every
+                # caller's offline fallback (decision matrix heuristic, graph/date/anaphora
+                # heuristic extractors, consolidation skip) engages immediately. This keeps
+                # tests/CI fast and makes deployments that only need retrieval fully
+                # self-contained. The memory path (embedding + pgvector + rerank) does not
+                # call the LLM, so recall quality is unchanged.
+                raise LLMProviderError(
+                    "OFFLINE_MODE is enabled — LLM call intentionally skipped (deterministic fallback).")
             client = self._get_client()
             candidate_models = [self.model] + \
                 [m for m in FALLBACK_MODELS if m != self.model]

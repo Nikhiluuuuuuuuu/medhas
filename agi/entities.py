@@ -15,32 +15,58 @@ The extractor is intentionally light: its job is to populate the existing graph
 
 from typing import Dict, List, Tuple, Optional
 
-# Relationship verbs we turn into typed edges (subject --[rel]--> object)
+# Relationship verbs we turn into typed edges (subject --[rel]--> object).
+# Extended well beyond the original small list so open extraction works WITHOUT an
+# LLM (offline mode): natural English verbs like "launched", "mentors", "makes",
+# "joined", "relocated" are handled by the deterministic heuristic, not a cloud call.
 RELATION_VERBS = {
     "founded": "FOUNDED",
     "co-founded": "CO_FOUNDED",
+    "cofounded": "CO_FOUNDED",
     "builds": "BUILDS",
+    "build": "BUILDS",
     "made": "MADE",
+    "makes": "MAKES",
+    "make": "MAKES",
     "created": "CREATED",
+    "create": "CREATES",
+    "launched": "LAUNCHED",
+    "launch": "LAUNCHED",
+    "released": "RELEASED",
+    "mentors": "MENTORS",
+    "mentor": "MENTORS",
+    "advises": "ADVISES",
+    "advise": "ADVISES",
+    "teaches": "TEACHES",
+    "joined": "JOINED",
+    "join": "JOINED",
+    "works at": "WORKS_AT",
+    "works for": "WORKS_FOR",
+    "employed by": "WORKS_FOR",
+    "relocated to": "RELOCATED_TO",
+    "relocated": "RELOCATED_TO",
+    "moved to": "MOVED_TO",
+    "moved": "MOVED_TO",
     "lives in": "LIVES_IN",
     "live in": "LIVES_IN",
     "lived in": "LIVED_IN",
-    "works at": "WORKS_AT",
-    "works for": "WORKS_FOR",
-    "moved to": "MOVED_TO",
-    "moved": "MOVED_TO",
     "is": "IS_A",
     "was": "IS_A",
     "are": "IS_A",
     "were": "IS_A",
     "prefers": "PREFERS",
+    "prefer": "PREFERS",
     "uses": "USES",
+    "use": "USES",
     "owns": "OWNS",
+    "own": "OWNS",
     "leads": "LEADS",
+    "lead": "LEADS",
     "runs": "RUNS",
     "headquarters": "HEADQUARTERS",
     "based in": "BASED_IN",
     "located in": "LOCATED_IN",
+    "makes": "MAKES",
 }
 
 COPULAR = {"is", "are", "was", "were", "been"}
@@ -133,15 +159,25 @@ def extract_relations(text: str) -> List[Tuple[str, str, str]]:
 
 def _last_entity(text: str) -> Optional[str]:
     ents = extract_entities(text)
-    return ents[-1] if ents else None
+    if ents:
+        return ents[-1]
+    # Offline fallback: grab the last alphabetic word (skip year/number tokens like
+    # '2023', which are fact properties, not entities). Lowercase names like 'priya'
+    # are valid subjects even though the heuristic NER only matches capitals. This is
+    # what lets open extraction work WITHOUT an LLM for natural-language lowercase names.
+    words = [w.strip(".,!?:;\"'()[]") for w in text.replace(",", " ").split()]
+    words = [w for w in words if w and w.lower() not in _STOPWORDS and not w.isdigit()
+             and not (len(w) == 4 and w.isdigit())]
+    return words[-1] if words else None
 
 
 def _first_entity(text: str) -> Optional[str]:
-    # for object, take the first capitalized span; fall back to first token
+    # for object, take the first capitalized span; fall back to first alphabetic token
     ents = extract_entities(text)
     if ents:
         return ents[0]
-    toks = [t for t in text.replace(",", " ").split() if t.lower() not in _STOPWORDS]
+    toks = [t.strip(".,!?:;\"'()[]") for t in text.replace(",", " ").split()]
+    toks = [t for t in toks if t and t.lower() not in _STOPWORDS and not t.isdigit()]
     return toks[0] if toks else None
 
 

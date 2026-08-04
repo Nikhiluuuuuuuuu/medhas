@@ -68,9 +68,24 @@ async def extract_and_persist_background(
                 {"role": "system", "content": EXTRACTION_PROMPT},
                 {"role": "user", "content": f"{context_block}\nUser turn: '{user_message}'\nAssistant response: '{assistant_response}'"},
             ]
-            response = await extractor_llm.chat_completion(messages, temperature=0.0)
-            raw_content = (response.get("content", "") or "").strip()
+            try:
+                response = await extractor_llm.chat_completion(messages, temperature=0.0)
+                raw_content = (response.get("content", "") or "").strip()
+            except Exception as llm_err:
+                # LLM unavailable (OFFLINE_MODE or network/429 failure). Fall back to
+                # storing the raw turn as a single atomic fact so capture() still persists
+                # the experience — no data loss, no LLM dependency.
+                await atomic_mem.insert_fact(
+                    user_id, user_message, session_id=session_id, agent_id=agent_id
+                )
+                log_error(f"Background extraction LLM unavailable ({llm_err}); stored raw fact.")
+                return
             if not raw_content:
+                # Empty structured response (e.g. LLM returned nothing) — store the raw
+                # turn as a single atomic fact so capture() still persists the experience.
+                await atomic_mem.insert_fact(
+                    user_id, user_message, session_id=session_id, agent_id=agent_id
+                )
                 return
             if "```json" in raw_content:
                 raw_content = raw_content.split("```json", 1)[1].split("```", 1)[0].strip()
