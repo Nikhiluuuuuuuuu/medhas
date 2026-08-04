@@ -205,8 +205,16 @@ INDEXES = [
 ]
 
 
-async def initialize_agi_schema() -> None:
-    """Apply all additive AGI schema extensions. Idempotent."""
+async def initialize_agi_schema(dim: int | None = None) -> None:
+    """Apply all additive AGI schema extensions. Idempotent.
+
+    ``dim`` is the true embedding dimension (from the configured model). Any embedding
+    columns are resized to match so a 384-dim model (or any other) works without a
+    'expected 768 dimensions' error.
+    """
+    if dim is None:
+        from medhas.embeddings.embedding_provider import get_embedding_dimension
+        dim = get_embedding_dimension()
     async with DatabasePool.acquire() as conn:
         for col, ddl in FACT_COLUMNS:
             await conn.execute(f"ALTER TABLE atomic_facts ADD COLUMN IF NOT EXISTS {col} {ddl};")
@@ -218,6 +226,8 @@ async def initialize_agi_schema() -> None:
             await conn.execute(stmt)
         for stmt in INDEXES:
             await conn.execute(stmt)
+        # Resize embedding columns created above to the detected dimension.
+        await conn.execute(f"ALTER TABLE percept_buffer ALTER COLUMN embedding TYPE vector({dim});")
     if settings.FACT_RERANKER_WARMUP and settings.FACT_RERANKER_ENABLED:
         try:
             from medhas.memory.atomic.reranker import warmup_reranker

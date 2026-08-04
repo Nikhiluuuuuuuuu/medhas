@@ -55,7 +55,8 @@ class UnifiedMemoryEngine:
                 system_prompt, messages = await assemble_context_and_prompt(user_id, session_id, user_message)
 
             # 4. LLM Completion & Tool Call Execution Loop
-            llm_response = await self.llm.chat_completion(messages, tools=MEMORY_TOOLS_DECLARATION)
+            from medhas.llm.gateway import safe_chat_completion
+            llm_response = await safe_chat_completion(messages, tools=MEMORY_TOOLS_DECLARATION)
             tool_calls = llm_response.get("tool_calls", [])
 
             # Handle tool calls mid-session if requested by LLM
@@ -89,7 +90,7 @@ class UnifiedMemoryEngine:
                     })
 
                 # Re-query LLM for final natural response after tool execution
-                second_response = await self.llm.chat_completion(messages, temperature=0.3)
+                second_response = await safe_chat_completion(messages, temperature=0.3)
                 final_text = second_response.get("content", "").strip() or "Understood. Updated working memory context."
             else:
                 final_text = llm_response.get("content", "").strip() or "Understood. Context analyzed."

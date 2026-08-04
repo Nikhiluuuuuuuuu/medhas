@@ -51,3 +51,30 @@ class FastEmbeddingProvider(BaseEmbeddingProvider):
             except Exception as e:
                 logger.error(f"Batch embedding error: {e}")
                 raise EmbeddingGenerationError(f"Batch vector embedding failed: {e}")
+
+
+def get_embedding_dimension(model_name: Optional[str] = None) -> int:
+    """Return the TRUE output dimension of the configured FastEmbed model.
+
+    The DB column size MUST match the model, not a guessed constant. Detecting it
+    from the loaded model prevents the 'expected 768 dimensions, not 384' class of
+    failures when a different (e.g. 384-dim) embedding model is configured.
+    """
+    from medhas.config import settings
+
+    name = model_name or settings.EMBEDDING_MODEL_NAME
+    try:
+        from fastembed import TextEmbedding
+        probe = TextEmbedding(model_name=name)
+        dim = len(list(probe.embed(["dimension-probe"]))[0])
+    except Exception as e:  # pragma: no cover - model load failure
+        logger.error(f"Embedding dimension probe failed for {name}: {e}")
+        return settings.EMBEDDING_DIMENSION
+    # Keep the rest of the system (rerankers, schema) in sync with reality.
+    if dim != settings.EMBEDDING_DIMENSION:
+        logger.warning(
+            f"EMBEDDING_DIMENSION is {settings.EMBEDDING_DIMENSION} but model "
+            f"{name} emits {dim}-dim vectors; using {dim} as the source of truth."
+        )
+        settings.EMBEDDING_DIMENSION = dim
+    return dim

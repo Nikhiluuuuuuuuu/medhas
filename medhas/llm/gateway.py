@@ -10,8 +10,9 @@ from typing import Optional
 
 from .base import BaseLLM
 from .config import LLMConfig
-from .errors import LLMConfigError
+from .errors import LLMConfigError, LLMRateLimitError, LLMConnectionError, LLMError
 from .router import LLMRouter, EXTRACTION, RESOLUTION, REASONING, SYNTHESIS
+from medhas.utils import log_error
 
 _router: Optional[LLMRouter] = None
 _lock = threading.Lock()
@@ -67,3 +68,38 @@ def reset() -> None:
     global _router
     with _lock:
         _router = None
+
+
+# Graceful-degradation fallback used when the LLM is unavailable (rate-limited,
+# offline, key missing). Returns a provider-shaped dict so call sites don't crash.
+_LLM_UNAVAILABLE_FALLBACK = {
+    "content": (
+        "I'm temporarily unable to reach the language model (rate limit or connection "
+        "error). Your message was received and stored; please try again in a moment."
+    ),
+    "model": "unavailable",
+    "finish_reason": "error",
+    "raw": None,
+}
+
+
+async def safe_chat_completion(messages, *, task: Optional[str] = None,
+                               max_retries: int = 1, **kwargs):
+    """chat_completion with graceful degradation.
+
+    - On LLMRateLimitError / LLMConnectionError, retries once on the fast/extraction model.
+    - If the fallback also fails, returns a user-facing fallback dict instead of raising,
+      so a provider outage never crashes the request (e.g. the ASGI app).
+    """
+    errors = (LLMRateLimitError, LLMConnectionError, LLMError)
+    try:
+        return await get_llm(task).chat_completion(messages, **kwargs)
+    except errors:
+        # Retry once on the cheap/fast model (often on a separate quota / lower cost).
+        if max_retries > 0:
+            try:
+                return await get_extractor().chat_completion(messages, **kwargs)
+            except errors:
+                pass
+        log_error("LLM unavailable after retry; returning graceful fallback response.")
+        return dict(_LLM_UNAVAILABLE_FALLBACK)
