@@ -85,14 +85,38 @@ def _safe_json(text: str) -> Optional[dict]:
     return None
 
 
-async def extract_graph_open(fact_text: str) -> Tuple[List[Tuple[str, str, str]], List[Dict[str, str]]]:
-    """LLM-based open extraction. Returns (triples, entity_type_hints).
+async def extract_graph_open(
+    fact_text: str, user_id: Optional[str] = None
+) -> Tuple[List[Tuple[str, str, str]], List[Dict[str, str]]]:
+    """LLM-based OPEN extraction. Returns (triples, entity_type_hints).
 
-    Falls back to the heuristic extractor on any failure."""
+    Relations are NOT taken from a closed hard-coded list: the LLM may emit ANY
+    relationship string, and each discovered relation is recorded into the evolving
+    `relation_types` vocabulary (schema evolution) when ``user_id`` is provided.
+
+    Falls back to the heuristic extractor (agi.entities, seeded by RELATION_VERBS) on
+    any failure — that fallback also records its relations so the vocabulary still grows.
+    """
     async with measure_latency("agi.llm_extract.extract_graph_open"):
+        # Vocabulary hint: let the LLM reuse existing relations where semantically apt,
+        # which reduces synonym drift (e.g. CO_FOUNDED vs COFOUNDED) without capping it.
+        vocab_hint = ""
+        if user_id:
+            try:
+                from agi.cognition.schema_evolution import known_relations
+                known = await known_relations(user_id)
+                if known:
+                    vocab_hint = (
+                        " Prefer reusing an EXISTING relation from this user's vocabulary "
+                        f"when semantically identical: {sorted(known)[:40]}. "
+                        "Otherwise coin a clear new UPPER_SNAKE_CASE relation."
+                    )
+            except Exception:
+                pass
         try:
+            sys_prompt = _EXTRACT_SYS + vocab_hint
             resp = await _llm.chat_completion([
-                {"role": "system", "content": _EXTRACT_SYS},
+                {"role": "system", "content": sys_prompt},
                 {"role": "user", "content": fact_text},
             ], temperature=0.0)
             data = _safe_json(resp.get("content", "")) if isinstance(resp, dict) else None
@@ -110,6 +134,11 @@ async def extract_graph_open(fact_text: str) -> Tuple[List[Tuple[str, str, str]]
                     ents.append({"name": str(e["name"]).strip(),
                                  "type": str(e.get("type", "ENTITY")).upper()})
             if triples or ents:
+                # OPEN vocabulary: record every discovered relation into the evolving set.
+                if user_id:
+                    from agi.cognition.schema_evolution import record_relation
+                    for _s, r, _o in triples:
+                        await record_relation(user_id, r, source="extracted")
                 return triples, ents
             raise ValueError("no triples/entities produced")
         except Exception as e:
@@ -138,6 +167,11 @@ async def extract_graph_open(fact_text: str) -> Tuple[List[Tuple[str, str, str]]
                     if cand.lower() not in seen and not cand.isdigit():
                         seen.add(cand.lower())
                         ents.append({"name": cand, "type": "ENTITY"})
+            # Even the offline fallback records its relations -> vocabulary still grows.
+            if user_id:
+                from agi.cognition.schema_evolution import record_relation
+                for _s, r, _o in triples:
+                    await record_relation(user_id, r, source="extracted")
             return triples, ents
 
 

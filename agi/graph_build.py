@@ -38,7 +38,7 @@ async def build_fact_graph(
             from memory.graph.upsert_node import upsert_node
             from memory.graph.update_edge import update_edge
 
-            relations, entity_hints = await extract_graph_open(fact_text)
+            relations, entity_hints = await extract_graph_open(fact_text, user_id=user_id)
             type_by_name = {h["name"].lower(): h["type"] for h in entity_hints}
             if not relations:
                 return 0

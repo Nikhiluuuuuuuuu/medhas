@@ -137,3 +137,68 @@ async def test_engine_think_runs_pipeline_offline():
         assert res["action"]["executed"] is True
     finally:
         await _cleanup(uid)
+
+
+# ---------------------------------------------------------------------------
+# OPEN RELATION VOCABULARY (schema evolution) — the relation set is NOT hard-coded
+# ---------------------------------------------------------------------------
+async def test_relation_vocabulary_grows_not_hardcoded():
+    from agi.cognition.schema_evolution import (
+        record_relation, known_relations, seed_default_relations,
+    )
+    from agi.entities import RELATION_VERBS
+    uid = _uid()
+    try:
+        await initialize_schema()
+        # 1. Seed boots the vocabulary from the offline fallback list (RELATION_VERBS),
+        #    but the seed is NOT the ceiling — it is just the starting point.
+        await seed_default_relations(uid, RELATION_VERBS)
+        known = await known_relations(uid)
+        assert "MENTORS" in known and "WORKS_AT" in known, known
+
+        # 2. A NOVEL relation (not in RELATION_VERBS) gets recorded when discovered.
+        #    This proves the set grows at runtime instead of being frozen.
+        assert "ACQUIRED" not in set(RELATION_VERBS.values())
+        await record_relation(uid, "acquired", source="extracted")
+        known2 = await known_relations(uid)
+        assert "ACQUIRED" in known2, known2
+        # usage count is tracked
+        async with DatabasePool.acquire() as c:
+            cnt = await c.fetchval(
+                "SELECT usage_count FROM relation_types WHERE user_id=$1 AND relation=$2",
+                uid, "ACQUIRED",
+            )
+            assert cnt == 1
+            # re-recording bumps the count (schema evolution, not duplicate rows)
+            await record_relation(uid, "acquired", source="extracted")
+            cnt2 = await c.fetchval(
+                "SELECT usage_count FROM relation_types WHERE user_id=$1 AND relation=$2",
+                uid, "ACQUIRED",
+            )
+            assert cnt2 == 2
+    finally:
+        async with DatabasePool.acquire() as c:
+            await c.execute("DELETE FROM relation_types WHERE user_id=$1", uid)
+        await _cleanup(uid)
+
+
+async def test_extract_graph_open_records_relations_offline():
+    # Offline path: extract_graph_open falls back to the heuristic, but still records
+    # each discovered relation into the evolving vocabulary (so the set grows even
+    # without an LLM). Proves the hard-coded RELATION_VERBS is a seed, not a ceiling.
+    from agi.llm_extract import extract_graph_open
+    uid = _uid()
+    try:
+        await initialize_schema()
+        triples, _ = await extract_graph_open(
+            "priya founded lumina and works at kraionyx", user_id=uid
+        )
+        rels = {r for _s, r, _o in triples}
+        assert "FOUNDED" in rels and "WORKS_AT" in rels, rels
+        from agi.cognition.schema_evolution import known_relations
+        known = await known_relations(uid)
+        assert "FOUNDED" in known and "WORKS_AT" in known, known
+    finally:
+        async with DatabasePool.acquire() as c:
+            await c.execute("DELETE FROM relation_types WHERE user_id=$1", uid)
+        await _cleanup(uid)

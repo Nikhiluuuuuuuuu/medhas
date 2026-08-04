@@ -168,6 +168,20 @@ TABLES = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS idx_body_effects_user_action ON body_effects(user_id, action);",
+    # Open-relation vocabulary (schema evolution): the set of relation types is NOT
+    # hard-coded — it is learned and persisted here as extraction discovers new
+    # relations. RELATION_VERBS merely seeds this table as a fallback vocabulary.
+    """
+    CREATE TABLE IF NOT EXISTS relation_types (
+        user_id    TEXT NOT NULL,
+        relation   VARCHAR(255) NOT NULL,
+        usage_count INTEGER NOT NULL DEFAULT 1,
+        source     VARCHAR(20) NOT NULL DEFAULT 'extracted',  -- seed | extracted | inferred
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (user_id, relation)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_relation_types_user ON relation_types(user_id);",
 ]
 
 EPISODE_COLUMNS = [

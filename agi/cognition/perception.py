@@ -91,7 +91,7 @@ async def perceive(
     else:
         text = raw if isinstance(raw, str) else str(raw)
 
-    triples, ents = await _extract.extract_graph_open(text)
+    triples, ents = await _extract.extract_graph_open(text, user_id=user_id)
     names = list({e["name"] for e in ents}) or _entities.extract_entities(text)
 
     salience = await _salience(text, names, triples, user_id)
