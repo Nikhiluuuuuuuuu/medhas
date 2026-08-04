@@ -41,6 +41,7 @@ dependencies = [
 # Extra provider SDKs — install only what you configure via LLM_PROVIDER / EMBEDDER_BACKEND.
 anthropic = ["anthropic>=0.40.0"]
 gemini = ["google-generativeai>=0.7.0"]
+bedrock = ["boto3>=1.34.0"]
 reranker = ["sentence-transformers>=3.0.0", "torch>=2.1.0"]
 dev = [
     "pytest>=8.0.0",

@@ -8,6 +8,7 @@ from .config import LLMConfig
 from .errors import LLMConfigError
 from .providers import (
     AnthropicLLM,
+    BedrockLLM,
     GeminiLLM,
     LiteLLMLLM,
     OllamaLLM,
@@ -26,6 +27,7 @@ _REGISTRY = {
     "lmstudio": (OpenAICompatibleLLM, None),
     "anthropic": (AnthropicLLM, "ANTHROPIC_API_KEY"),
     "gemini": (GeminiLLM, "GEMINI_API_KEY"),
+    "bedrock": (BedrockLLM, None),                        # AWS credential chain
     "litellm": (LiteLLMLLM, None),
 }
 
