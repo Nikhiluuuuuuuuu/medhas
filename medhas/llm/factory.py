@@ -48,7 +48,9 @@ def create_llm(config: LLMConfig) -> BaseLLM:
             raise LLMConfigError(
                 f"Provider {config.provider!r} needs {required_env} (or set config.api_key).")
     # OpenAI-compatible aliases need the right base_url unless caller supplied one.
-    if cls is OpenAICompatibleLLM and config.base_url is None:
+    # Treat empty / whitespace-only URLs as "not supplied" too.
+    supplied_base = (config.base_url or "").strip() or None
+    if cls is OpenAICompatibleLLM and supplied_base is None:
         base_urls = {
             "groq": "https://api.groq.com/openai/v1",
             "together": "https://api.together.xyz/v1",

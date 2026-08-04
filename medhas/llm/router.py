@@ -36,7 +36,7 @@ class LLMRouter:
             provider=getattr(settings, "LLM_PROVIDER", "groq"),
             model=getattr(settings, "LLM_MODEL", getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")),
             api_key=getattr(settings, "LLM_API_KEY", getattr(settings, "GROQ_API_KEY", None)),
-            base_url=getattr(settings, "LLM_BASE_URL", getattr(settings, "GROQ_BASE_URL", None)),
+            base_url=getattr(settings, "LLM_BASE_URL", getattr(settings, "GROQ_BASE_URL", None)) or None,
             temperature=getattr(settings, "LLM_TEMPERATURE", getattr(settings, "GROQ_TEMPERATURE", 0.1)),
             max_tokens=getattr(settings, "LLM_MAX_TOKENS", getattr(settings, "GROQ_MAX_TOKENS", 2048)),
             timeout=getattr(settings, "LLM_TIMEOUT", 60.0),

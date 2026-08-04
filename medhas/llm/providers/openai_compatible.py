@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 from ..base import BaseLLM, Message
 from ..config import LLMConfig
-from ..errors import LLMRateLimitError, LLMTimeoutError, LLMConnectionError, LLMError
+from ..errors import LLMRateLimitError, LLMTimeoutError, LLMConnectionError, LLMError, LLMConfigError
 from ..metrics import measure_latency
 
 
@@ -22,6 +22,12 @@ class OpenAICompatibleLLM(BaseLLM):
             from openai import AsyncOpenAI
         except ImportError as e:  # pragma: no cover
             raise LLMError("`openai` is required for OpenAICompatibleLLM") from e
+        if not config.base_url or not str(config.base_url).strip():
+            raise LLMConfigError(
+                "OpenAICompatibleLLM requires a non-empty `base_url` (e.g. "
+                "https://api.groq.com/openai/v1 for Groq). Set LLM_BASE_URL or use a "
+                "provider alias (groq/together/deepseek/openrouter) that supplies one."
+            )
         self._client = AsyncOpenAI(
             api_key=config.api_key or "not-needed",
             base_url=config.base_url,

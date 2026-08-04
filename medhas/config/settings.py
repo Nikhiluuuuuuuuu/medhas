@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "groq"
     LLM_MODEL: str = "llama-3.3-70b-versatile"
     LLM_API_KEY: str = ""
-    LLM_BASE_URL: str = ""          # empty -> resolved per-provider in the factory
+    LLM_BASE_URL: Optional[str] = None   # empty/None -> resolved per-provider in the factory
     LLM_FAST_MODEL: str = "llama-3.1-8b-instant"
     LLM_TEMPERATURE: float = 0.1
     LLM_MAX_TOKENS: int = 2048
