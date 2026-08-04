@@ -22,6 +22,9 @@ from memory.graph.export_graph import export_knowledge_graph
 from memory.procedural import store_skill_playbook
 from pipeline import UnifiedMemoryEngine
 
+# Roadmap AGI-memory endpoints (E1–E37), additive router — does not touch existing routes.
+from agi.api import router as agi_router
+
 app = FastAPI(
     title="AGI Unified Memory Engine API",
     description="General-purpose production memory engine supporting any arbitrary facts, domains, entities, and multi-turn conversations.",
@@ -107,11 +110,14 @@ async def api_run_dream(user_id: str):
 
 @app.post("/procedural/playbook")
 async def api_store_playbook(req: StorePlaybookRequest):
-    """Store a general procedural skill playbook for any task pattern."""
-    await store_skill_playbook(req.user_id, req.task_pattern, req.steps)
-    return {"status": "success", "user_id": req.user_id, "task_pattern": req.task_pattern}
+    """Store a procedural skill playbook."""
+    playbook = await store_skill_playbook(req.user_id, req.task_pattern, req.steps)
+    return {"status": "success", "playbook": playbook}
 
-# Mount static files for web application frontend
+# Mount the additive AGI roadmap router (E1–E37) without disturbing existing routes.
+app.include_router(agi_router)
+
+# Mount static files for web application frontend (preserve original behaviour).
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 if os.path.exists(static_dir):
     app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")

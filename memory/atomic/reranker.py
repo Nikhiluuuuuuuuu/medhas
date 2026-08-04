@@ -102,6 +102,24 @@ _reranker = None
 _reranker_tried = False  # separate flag so a transient load failure is retried, never permanently disabled
 
 
+def warmup_reranker() -> None:
+    """Pre-load the cross-encoder at startup so the first query isn't slow.
+
+    Honours FACT_RERANKER_STRONG_MODEL (if set) by swapping the model before load.
+    Failures are non-fatal: the deterministic fusion rerank always remains available.
+    """
+    if not settings.FACT_RERANKER_ENABLED:
+        return
+    strong = getattr(settings, "FACT_RERANKER_STRONG_MODEL", "") or ""
+    if strong:
+        # override the active model for this process; get_reranker reads settings at load
+        settings.FACT_RERANKER_MODEL = strong
+    try:
+        get_reranker()
+    except Exception as e:  # pragma: no cover - best-effort warm-up
+        log_error(f"Reranker warm-up failed (fusion fallback active): {e}")
+
+
 def get_reranker() -> Optional[CrossEncoderReranker]:
     """Return the shared cross-encoder reranker, or None if disabled/unavailable.
 

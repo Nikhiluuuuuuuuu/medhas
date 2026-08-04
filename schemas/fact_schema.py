@@ -43,3 +43,11 @@ class FactSearchResult(BaseModel):
     categories: List[str] = Field(default_factory=list)
     memory_type: str = "semantic"
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    # --- E12/E10 provenance + uncertainty (surfaced on recall for source-grounding) ---
+    belief_confidence: float = 1.0
+    valid_from: Optional[datetime] = None
+    valid_to: Optional[datetime] = None
+    invalidated_by: List[str] = Field(default_factory=list)
+    provenance_kind: str = "explicit"   # explicit | implicit_inferred
+    source_episode_id: Optional[str] = None
+    contradicted_by: List[str] = Field(default_factory=list)

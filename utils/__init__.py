@@ -7,8 +7,9 @@ from utils.logging import (
     log_atomic,
     log_graph,
     log_tool,
-    log_error
+    log_error,
 )
+from utils.dates import extract_fact_date
 
 __all__ = [
     "logger",
@@ -20,4 +21,5 @@ __all__ = [
     "log_graph",
     "log_tool",
     "log_error",
+    "extract_fact_date",
 ]

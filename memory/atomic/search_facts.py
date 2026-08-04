@@ -24,6 +24,143 @@ def _minmax(values: List[float]) -> Dict[float, float]:
     return {v: (v - lo) / (hi - lo) for v in values}
 
 
+def _is_temporal_query(query_text: str) -> bool:
+    """Detect 'before/after/prior to/previously/until' style temporal queries.
+
+    Deterministic keyword check — no LLM, no model. Used to trigger the
+    temporal rescue/boost path so time-appropriate facts surface even when
+    their vector similarity to the query is low (the 2019 'studied CS' edge).
+    """
+    q = query_text.lower()
+    return any(tok in q for tok in ("before", "after", "prior to", "previously", "until", "since", "earlier", "later"))
+
+
+def _extract_anchor_date(query_text: str) -> Optional[datetime]:
+    """Pull a year (YYYY) or 'YYYY-MM' from a temporal query, if present.
+
+    Returns a UTC datetime anchored at the start of that period, or None.
+    Example: 'before founding Kraionyx in 2025' -> 2025-01-01. Used to orient
+    the directional temporal boost (boost facts on the correct side of the anchor).
+    """
+    import re
+    m = re.search(r"(19|20)\d{2}(?:-\d{1,2})?", query_text)
+    if not m:
+        return None
+    token = m.group(0)
+    try:
+        if "-" in token:
+            return datetime.fromisoformat(token).replace(tzinfo=timezone.utc)
+        return datetime(int(token), 1, 1, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _temporal_boost(anchor: Optional[datetime], direction: str, valid_from: Optional[datetime]) -> float:
+    """Boost multiplier for a candidate fact under a temporal query.
+
+    direction 'before' -> facts strictly earlier than the anchor get up to +2.0
+    (scaled by how much earlier); 'after' -> facts later than the anchor.
+    Facts on the wrong side get a mild penalty. When the query has no explicit
+    year (anchor None), 'now' is used as the reference so genuinely older/newer
+    facts are promoted relative to the rest of the candidate set.
+    """
+    if valid_from is None:
+        return 1.0
+    ref = anchor if anchor is not None else datetime.now(timezone.utc)
+    vf = valid_from if valid_from.tzinfo else valid_from.replace(tzinfo=timezone.utc)
+    delta_days = (vf - ref).total_seconds() / 86400.0
+    if direction == "before":
+        if delta_days < 0:
+            # earlier: stronger boost the further back it is (cap at +2.0)
+            return 1.0 + min(2.0, abs(delta_days) / 365.0)
+        return 0.5  # wrong side of the anchor
+    else:  # after
+        if delta_days > 0:
+            return 1.0 + min(2.0, delta_days / 365.0)
+        return 0.5
+
+
+def _temporal_direction(query_text: str) -> str:
+    q = query_text.lower()
+    if any(t in q for t in ("before", "prior to", "previously", "until", "earlier")):
+        return "before"
+    if any(t in q for t in ("after", "since", "later")):
+        return "after"
+    return "before"  # default orientation for ambiguous temporal queries
+
+
+async def _temporal_rescue(
+    conn, user_id: str, query_text: str, vector_str: str, anchor: Optional[datetime], direction: str, limit: int
+) -> List[Dict[str, Any]]:
+    """Rescue time-appropriate facts that vector/FTS similarity dropped below threshold.
+
+    Runs ONLY for temporal queries and ONLY when the candidate set lacks a fact on the
+    correct temporal side of the anchor. Pulls active facts whose valid_from is on the
+    requested side, ordered by temporal closeness to the anchor, up to `limit` extra rows.
+    Deterministic, no LLM. Keeps the change cost-free on the common (non-temporal) path.
+    """
+    if anchor is None:
+        # No explicit year in the query (e.g. "before founding Kraionyx"). Orient by
+        # direction only: 'before' -> oldest facts first, 'after' -> newest first.
+        if direction == "before":
+            order = "valid_from ASC"
+            cond = "valid_from IS NOT NULL"
+        else:
+            order = "valid_from DESC"
+            cond = "valid_from IS NOT NULL"
+        try:
+            rows = await conn.fetch(
+                f"""
+                SELECT id, user_id, session_id, agent_id, run_id, fact_text, categories,
+                       memory_type, metadata, importance_score, belief_confidence,
+                       valid_from, valid_to, invalidated_by, provenance_kind,
+                       source_episode_id, contradicted_by,
+                       (1 - (embedding <=> $1::vector)) AS raw_similarity,
+                       (1 - (embedding <=> $1::vector)) * (1.0 / (1.0 + 0.05 * (EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at)) / 86400.0))) AS decayed_similarity,
+                       ts_rank_cd(to_tsvector('english', fact_text), to_tsquery('english', $2::text)) AS fts_rank,
+                       created_at
+                FROM atomic_facts
+                WHERE user_id = $3 AND is_active = TRUE AND {cond}
+                ORDER BY {order}
+                LIMIT {limit};
+                """,
+                vector_str, " | ".join(query_text.split()) or query_text, user_id,
+            )
+            return list(rows)
+        except Exception as e:
+            log_error(f"temporal rescue skipped: {e}")
+            return []
+
+    if direction == "before":
+        cond = "valid_from < $1"
+        order = "valid_from DESC"
+    else:
+        cond = "valid_from > $1"
+        order = "valid_from ASC"
+    try:
+        rows = await conn.fetch(
+            f"""
+            SELECT id, user_id, session_id, agent_id, run_id, fact_text, categories,
+                   memory_type, metadata, importance_score, belief_confidence,
+                   valid_from, valid_to, invalidated_by, provenance_kind,
+                   source_episode_id, contradicted_by,
+                   (1 - (embedding <=> $2::vector)) AS raw_similarity,
+                   (1 - (embedding <=> $2::vector)) * (1.0 / (1.0 + 0.05 * (EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at)) / 86400.0))) AS decayed_similarity,
+                   ts_rank_cd(to_tsvector('english', fact_text), to_tsquery('english', $3::text)) AS fts_rank,
+                   created_at
+            FROM atomic_facts
+            WHERE user_id = $4 AND is_active = TRUE AND {cond}
+            ORDER BY {order}
+            LIMIT {limit};
+            """,
+            anchor, vector_str, " | ".join(query_text.split()) or query_text, user_id,
+        )
+        return list(rows)
+    except Exception as e:  # never break the main path
+        log_error(f"temporal rescue skipped: {e}")
+        return []
+
+
 def rerank_facts(
     query_text: str,
     results: List[FactSearchResult],
@@ -128,6 +265,13 @@ async def search_facts(
                         memory_type,
                         metadata,
                         importance_score,
+                        belief_confidence,
+                        valid_from,
+                        valid_to,
+                        invalidated_by,
+                        provenance_kind,
+                        source_episode_id,
+                        contradicted_by,
                         (1 - (embedding <=> $1::vector)) AS raw_similarity,
                         (1 - (embedding <=> $1::vector)) * (1.0 / (1.0 + 0.05 * (EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at)) / 86400.0))) AS decayed_similarity,
                         ts_rank_cd(to_tsvector('english', fact_text), to_tsquery('english', $2::text)) AS fts_rank,
@@ -139,8 +283,40 @@ async def search_facts(
                 """
                 rows = await conn.fetch(sql, *params)
 
-                if not rows:
-                    return []
+                # --- Temporal rescue (zero-LLM, only for temporal queries) ---
+                # Vector/FTS similarity alone drops genuinely older/newer facts for
+                # "before/after" queries (e.g. the 2019 'studied CS' fact). If no
+                # candidate sits on the requested temporal side of the anchor, pull
+                # time-appropriate facts so the temporal graph is actually consulted.
+                temporal = _is_temporal_query(query_text)
+                anchor = _extract_anchor_date(query_text) if temporal else None
+                direction = _temporal_direction(query_text) if temporal else "before"
+                if temporal:
+                    if anchor is not None:
+                        side_present = any(
+                            (r["valid_from"] is not None)
+                            and (
+                                (direction == "before" and r["valid_from"] < anchor)
+                                or (direction == "after" and r["valid_from"] > anchor)
+                            )
+                            for r in rows
+                        )
+                        rescue = not side_present
+                    else:
+                        # No explicit year: "before/after" asks for temporal context the
+                        # vector search dropped. Always rescue the oldest/newest facts so
+                        # they can be directionally boosted into the result set.
+                        rescue = True
+                    if rescue:
+                        rescued = await _temporal_rescue(
+                            conn, user_id, query_text, vector_str, anchor, direction, limit
+                        )
+                        seen = {r["id"] for r in rows}
+                        for rr in rescued:
+                            if rr["id"] not in seen:
+                                rows = rows + [rr]
+                                seen.add(rr["id"])
+
 
                 # Rank list 1: Vector similarity rank (decayed)
                 vector_sorted = sorted(rows, key=lambda x: float(x["decayed_similarity"]), reverse=True)
@@ -196,6 +372,12 @@ async def search_facts(
                     )
                     composite_score = rrf_val * importance_norm * retention
 
+                    # Temporal directional boost (zero-LLM): for "before/after" queries,
+                    # facts on the correct temporal side of the anchor are promoted, and
+                    # facts on the wrong side are mildly penalised. No cost on non-temporal path.
+                    if temporal:
+                        composite_score *= _temporal_boost(anchor, direction, r.get("valid_from"))
+
                     # HippoRAG PPR boost: facts mentioning an activated graph entity rank higher
                     if boost_entities:
                         fact_lc = r["fact_text"].lower()
@@ -218,6 +400,13 @@ async def search_facts(
                             categories=list(r.get("categories") or []),
                             memory_type=r.get("memory_type", "semantic"),
                             metadata=_coerce_json(r.get("metadata")),
+                            belief_confidence=float(r.get("belief_confidence") or 1.0),
+                            valid_from=r.get("valid_from"),
+                            valid_to=r.get("valid_to"),
+                            invalidated_by=list(r.get("invalidated_by") or []),
+                            provenance_kind=r.get("provenance_kind", "explicit"),
+                            source_episode_id=r.get("source_episode_id"),
+                            contradicted_by=list(r.get("contradicted_by") or []),
                         ))
                         # stash composite score for ranking (not part of schema)
                         _composite[fid] = composite_score
@@ -263,6 +452,51 @@ async def search_facts(
                                     r.rrf_score = round(float(d.get("rerank_score", r.rrf_score)), 6)
                     except Exception as e:
                         log_error(f"Cross-encoder rerank skipped (fusion fallback active): {e}")
+
+                # --- Guaranteed temporal slot (zero-LLM) ---
+                # For "before/after" queries, ensure the final set contains at least one
+                # fact on the requested temporal side. If none made the cut by composite,
+                # swap the lowest-composite result for the best rescued candidate that
+                # satisfies the direction. This makes the temporal graph authoritative for
+                # temporal queries without inflating non-temporal ranking.
+                if temporal and results:
+                    # Slot is satisfied only if a fact on the correct temporal side is
+                    # actually present in the top-N. For no-anchor queries we must compare
+                    # against the globally oldest/newest candidate (rescued facts included),
+                    # not just among the current results — otherwise the oldest current
+                    # result falsely satisfies the slot while the truly-older fact is dropped.
+                    all_times = [r.get("valid_from") for r in rows if r.get("valid_from") is not None]
+                    global_oldest = min(all_times) if all_times else None
+                    global_newest = max(all_times) if all_times else None
+
+                    def _on_side(r):
+                        vf = r.valid_from
+                        if vf is None:
+                            return False
+                        if anchor is not None:
+                            return (direction == "before" and vf < anchor) or (direction == "after" and vf > anchor)
+                        if direction == "before":
+                            return global_oldest is not None and vf <= global_oldest
+                        return global_newest is not None and vf >= global_newest
+
+                    if not any(_on_side(r) for r in results[:limit]):
+                        # The temporally-correct fact may already be in `results` but
+                        # ranked beyond `limit` (rescued). Pull the best side fact from
+                        # the full `results` list and swap it into the final top-N slot,
+                        # replacing the lowest-ranked current result.
+                        side_results = [r for r in results if _on_side(r)]
+                        if side_results:
+                            side_results.sort(
+                                key=lambda r: _composite.get(r.id, r.rrf_score), reverse=True
+                            )
+                            best = side_results[0]
+                            top_ids = {r.id for r in results[:limit]}
+                            if best.id in top_ids:
+                                pass  # already present, nothing to do
+                            else:
+                                results = results[:limit - 1] + [best] + [
+                                    r for r in results[limit:] if r.id != best.id
+                                ]
 
                 return results[:limit]
 

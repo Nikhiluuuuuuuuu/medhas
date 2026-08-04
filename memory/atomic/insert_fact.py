@@ -111,8 +111,28 @@ async def insert_fact(
 
                 if action in ("UPDATE", "DELETE"):
                     if target_id:
-                        log_atomic(f"Mem0 Matrix: Deactivating conflicting fact {target_id} ({action})")
-                        await deactivate_fact(target_id)
+                        # Subject-mismatch guard (Graphiti-style): never deactivate a target
+                        # whose subject entity differs from the incoming fact's subject. The
+                        # decision matrix can over-merge cross-subject neighbours that merely
+                        # share tokens (e.g. "priya launched lumina" vs "priya mentors rahul…
+                        # lumina"); deactivating the original would lose retrievable memory.
+                        # Keep both facts and resolve via valid_from instead of deletion.
+                        target_cand = next((c for c in candidates if c.id == target_id), None)
+                        if target_cand is not None:
+                            from agi.entities import query_entities
+                            new_subj = set(s.lower() for s in query_entities(fact_text))
+                            tgt_subj = set(s.lower() for s in query_entities(getattr(target_cand, "fact_text", "")))
+                            shared = new_subj & tgt_subj
+                            if not shared:
+                                log_atomic(
+                                    f"Mem0 Matrix: {action} on different-subject target "
+                                    f"{target_id}; keeping both (ADD)"
+                                )
+                                action = "ADD"
+                                target_id = None
+                        if action in ("UPDATE", "DELETE") and target_id is not None:
+                            log_atomic(f"Mem0 Matrix: Deactivating conflicting fact {target_id} ({action})")
+                            await deactivate_fact(target_id)
                     else:
                         # LLM asked to UPDATE/DELETE but named no resolvable target — do NOT
                         # silently insert a duplicate. Require a valid target; otherwise treat as
@@ -131,15 +151,22 @@ async def insert_fact(
             embedding = await embedder.embed_text(fact_text)
             vector_str = f"[{','.join(str(x) for x in embedding)}]"
 
+            # H1: derive valid_from from a date in the fact text when present (open LLM
+            # extraction, regex fallback), so temporal recall ('before T') is grounded
+            # without manual backdating and without a closed date-format vocabulary.
+            from agi.llm_extract import extract_date_open
+            extracted_dt = await extract_date_open(fact_text)
+
             async with DatabasePool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO atomic_facts (user_id, session_id, agent_id, run_id, fact_text, embedding, is_active, content_hash, categories, memory_type, metadata)
-                    VALUES ($1, $2, $3, $4, $5, $6::vector, TRUE, $7, $8, $9, $10::jsonb)
+                    INSERT INTO atomic_facts (user_id, session_id, agent_id, run_id, fact_text, embedding, is_active, content_hash, categories, memory_type, metadata, valid_from)
+                    VALUES ($1, $2, $3, $4, $5, $6::vector, TRUE, $7, $8, $9, $10::jsonb, COALESCE($11, CURRENT_TIMESTAMP))
                     RETURNING id, user_id, session_id, agent_id, run_id, fact_text, categories, memory_type, metadata, is_active, created_at;
                     """,
                     user_id, session_id, agent_id, run_id, fact_text, vector_str, content_hash,
-                    categories or [], memory_type, json.dumps(metadata or {})
+                    categories or [], memory_type, json.dumps(metadata or {}),
+                    extracted_dt,
                 )
                 assert row is not None, "Failed to insert atomic fact"
                 fact = AtomicFactSchema(
@@ -153,4 +180,9 @@ async def insert_fact(
                 return fact
         except Exception as e:
             log_error(f"Failed to insert fact: {e}")
-            raise StorageOperationError(f"Insert fact error: {e}")
+            # G1 fix: never silently return None (callers assert fact.id is not None and
+            # would otherwise lose the fact with no error). Surface the failure.
+            from core.exceptions import StorageOperationError
+            if isinstance(e, StorageOperationError):
+                raise
+            raise StorageOperationError(f"insert_fact failed: {e}") from e

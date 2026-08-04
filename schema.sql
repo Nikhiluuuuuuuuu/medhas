@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS atomic_facts (
     session_id UUID NULL,
     agent_id VARCHAR(255) NULL,
     fact_text TEXT NOT NULL,
-    embedding vector(384),
+    embedding vector(768),
     importance_score FLOAT NOT NULL DEFAULT 5.0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     run_id VARCHAR(255) NULL,                 -- Mem0 run scoping
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     name VARCHAR(255) NOT NULL,
     entity_type VARCHAR(100) NOT NULL, -- 'Person', 'Company', 'Location', 'Project', etc.
     attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
-    embedding vector(384) NULL,  -- node embedding for semantic entity merge (Graphiti-style)
+    embedding vector(768) NULL,  -- node embedding for semantic entity merge (Graphiti-style)
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, name)
 );
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS archival_memory (
     user_id VARCHAR(255) NOT NULL,
     agent_id VARCHAR(255) NULL,
     content TEXT NOT NULL,
-    embedding vector(384) NULL,
+    embedding vector(768) NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

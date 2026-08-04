@@ -34,12 +34,15 @@ class Settings(BaseSettings):
     GROQ_MAX_TOKENS: int = 2048
     
     # Embedding Model Settings
-    EMBEDDING_MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
-    EMBEDDING_DIMENSION: int = 384
+    EMBEDDING_MODEL_NAME: str = "BAAI/bge-base-en-v1.5"
+    EMBEDDING_DIMENSION: int = 768
     
     # Memory Retrieval Thresholds
     TOP_K_FACTS: int = 5
-    FACT_SIMILARITY_THRESHOLD: float = 0.70
+    # Cosine pre-filter. Tuned for BAAI/bge-base-en-v1.5 (768-dim); bge-small scored
+    # higher absolutes so 0.70 was safe, but bge-base's distribution is lower — 0.55
+    # keeps true matches while still dropping noise. Final calibration is the FoK gate.
+    FACT_SIMILARITY_THRESHOLD: float = 0.55
     MAX_HISTORICAL_MESSAGES: int = 10
 
     # Atomic dedup / decision-matrix (Mem0-inspired)
@@ -50,6 +53,11 @@ class Settings(BaseSettings):
     FACT_RERANKER_ENABLED: bool = True            # use local cross-encoder reranker (Mem0-style) when available
     FACT_RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # Mem0 SentenceTransformerReranker default
     FACT_RERANKER_NORMALIZE: bool = True          # sigmoid-normalize cross-encoder logits to [0,1] (per Mem0)
+    # Optional stronger cross-encoder for higher precision (e.g. mixedbread-ai/mxbai-rerank-base-v1, BAAI/bge-reranker-v2-m3).
+    # Empty -> use FACT_RERANKER_MODEL. Swap via env FACT_RERANKER_STRONG_MODEL to A/B without code edits.
+    FACT_RERANKER_STRONG_MODEL: str = ""
+    FACT_RERANKER_WARMUP: bool = True             # pre-load the cross-encoder at startup so first query isn't slow
+    AGI_ENGINE_ENABLED: bool = True               # route live agent recall/context through agi.engine (E1–E37)
     DECISION_MATRIX_MODEL: Optional[str] = None  # LLM model for the Mem0 decision matrix (None=default)
     
     model_config = SettingsConfigDict(
