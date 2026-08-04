@@ -5,10 +5,10 @@ Requires a reachable Postgres (medhas_test) with pgvector + uuid-ossp.
 """
 import pytest
 
-from memory.atomic import insert_fact, search_facts, get_all_active_facts, deactivate_fact
-from memory.graph import upsert_node, update_edge, run_spreading_activation, update_bayesian_belief
-from memory.working import create_memory_block, get_blocks, update_block
-from memory.procedural import store_skill_playbook, get_skill_playbook
+from medhas.memory.atomic import insert_fact, search_facts, get_all_active_facts, deactivate_fact
+from medhas.memory.graph import upsert_node, update_edge, run_spreading_activation, update_bayesian_belief
+from medhas.memory.working import create_memory_block, get_blocks, update_block
+from medhas.memory.procedural import store_skill_playbook, get_skill_playbook
 
 
 @pytest.mark.asyncio
@@ -57,7 +57,7 @@ async def test_graph_canonicalization_space_insensitive(user_id):
 
 @pytest.mark.asyncio
 async def test_graph_bayesian_compounding(user_id):
-    from memory.graph import upsert_node
+    from medhas.memory.graph import upsert_node
     await upsert_node(user_id, "TechCorp", "Company")
     p1 = await update_bayesian_belief(user_id, "TechCorp", likelihood_evidence=0.85, override_prior=0.50)
     # Second call reads the stored posterior from the first call -> compounds further.
@@ -95,7 +95,7 @@ async def test_atomic_md5_hash_dedup(user_id):
 # --- NEW: semantic node merge (>=0.95) on top of canonicalization (Step 2) ---
 @pytest.mark.asyncio
 async def test_graph_semantic_entity_merge(user_id):
-    from memory.graph.upsert_node import _semantic_match_node
+    from medhas.memory.graph.upsert_node import _semantic_match_node
     # Insert a node, then verify the semantic matcher returns the SAME canonical name
     # for an identical re-insert (cosine = 1.0 >= 0.95). This proves the merge path fires.
     a = await upsert_node(user_id, "Kraionyx AI", "Company")
@@ -108,7 +108,7 @@ async def test_graph_semantic_entity_merge(user_id):
 # --- NEW: edge invalidation on contradiction (Step 3) ---
 @pytest.mark.asyncio
 async def test_graph_edge_invalidation_on_contradiction(user_id):
-    from memory.graph import get_active_edges
+    from medhas.memory.graph import get_active_edges
     s = await upsert_node(user_id, "ProjectX", "Project")
     t1 = await upsert_node(user_id, "TeamA", "Team")
     t2 = await upsert_node(user_id, "TeamB", "Team")
@@ -120,7 +120,7 @@ async def test_graph_edge_invalidation_on_contradiction(user_id):
     assert t1.id not in active_targets, "old 'owned_by TeamA' edge must be invalidated"
     assert t2.id in active_targets, "new 'owned_by TeamB' edge must be active"
     # Prior edge must be soft-closed in the DB (bi-temporal). Verify by re-reading its row.
-    from infrastructure.db import DatabasePool
+    from medhas.storage import DatabasePool
     async with DatabasePool.acquire() as conn:
         row = await conn.fetchrow("SELECT valid_to FROM graph_edges WHERE id=$1", e1.id)
         assert row["valid_to"] is not None, "prior edge should have valid_to set (bi-temporal)"
@@ -129,7 +129,7 @@ async def test_graph_edge_invalidation_on_contradiction(user_id):
 # --- NEW: Letta archival cold store (Step 6) ---
 @pytest.mark.asyncio
 async def test_archival_recall(user_id):
-    from memory.archival import archive_memory, recall_archival
+    from medhas.memory.archival import archive_memory, recall_archival
     await archive_memory(user_id, "The deployment runbook lives in internal wiki section 7")
     rows = await recall_archival(user_id, "deployment runbook")
     assert len(rows) >= 1
@@ -139,7 +139,7 @@ async def test_archival_recall(user_id):
 # --- NEW: LightRAG dual-level retrieval modes (Step 6) ---
 @pytest.mark.asyncio
 async def test_dual_level_retrieval_modes(user_id):
-    from memory.archival import retrieve_memory
+    from medhas.memory.archival import retrieve_memory
     await insert_fact(user_id, "User prefers Rust for backend services")
     hybrid = await retrieve_memory(user_id, "backend language preference", mode="hybrid")
     assert hybrid["mode"] == "hybrid"
@@ -166,7 +166,7 @@ async def test_rerank_puts_exact_match_first(user_id):
 # --- NEW (Mem0): full CRUD + metadata + search filters ---
 @pytest.mark.asyncio
 async def test_mem0_crud_and_filters(user_id):
-    from memory.atomic import memory_crud
+    from medhas.memory.atomic import memory_crud
     f = await insert_fact(
         user_id, "User prefers PostgreSQL", run_id="run-1",
         categories=["database", "preference"], memory_type="semantic",
@@ -198,7 +198,7 @@ async def test_mem0_crud_and_filters(user_id):
 # --- NEW (LightRAG mix + Graphiti community_search) ---
 @pytest.mark.asyncio
 async def test_lightrag_mix_and_communities(user_id):
-    from memory.graph import upsert_node, update_edge, community_search, detect_communities
+    from medhas.memory.graph import upsert_node, update_edge, community_search, detect_communities
     a = await upsert_node(user_id, "TechCorp", "Company")
     b = await upsert_node(user_id, "Alice", "Person")
     c = await upsert_node(user_id, "KareOS", "Product")
@@ -210,8 +210,8 @@ async def test_lightrag_mix_and_communities(user_id):
     assert len(res) >= 1 and "TechCorp" in res[0]["members"]
 # --- NEW (Graphiti/Cognee): edge dedup — no duplicate active edges ---\n@pytest.mark.asyncio
 async def test_graph_edge_no_duplicate_active(user_id):
-    from memory.graph import upsert_node, update_edge
-    from infrastructure.db import DatabasePool
+    from medhas.memory.graph import upsert_node, update_edge
+    from medhas.storage import DatabasePool
     a = await upsert_node(user_id, "TechCorp", "Company")
     b = await upsert_node(user_id, "Alice", "Person")
     # Insert the SAME edge twice — must yield exactly ONE active edge (Cognee edge dedup).
@@ -257,8 +257,8 @@ async def test_insert_fact_update_no_target_no_duplicate(user_id):
 # --- NEW (Cognee/Mem0 hybrid): real BM25/FTS score flows into fusion rerank ---
 @pytest.mark.asyncio
 async def test_search_uses_real_fts_bm25_rank(user_id):
-    from memory.atomic import memory_crud
-    from memory.atomic.search_facts import search_facts, rerank_facts
+    from medhas.memory.atomic import memory_crud
+    from medhas.memory.atomic.search_facts import search_facts, rerank_facts
     await memory_crud.reset_user(user_id)
     await insert_fact(user_id, "KareOS is a hospital management platform built by TechCorp")
     await insert_fact(user_id, "TechCorp employs Alice as the lead platform engineer")
@@ -278,7 +278,7 @@ async def test_search_uses_real_fts_bm25_rank(user_id):
 # --- NEW (Letta): read_only block enforcement ---
 @pytest.mark.asyncio
 async def test_letta_readonly_block(user_id):
-    from memory.working import create_memory_block, update_block
+    from medhas.memory.working import create_memory_block, update_block
     await create_memory_block(user_id, "system_prompt", "System instructions", "Do no harm.", read_only=True)
     with pytest.raises(Exception):
         await update_block(user_id, "system_prompt", "hacked")
@@ -292,7 +292,7 @@ async def test_letta_readonly_block(user_id):
 # --- NEW (GBrain): typed links + backlinks + traversal ---
 @pytest.mark.asyncio
 async def test_gbrain_typed_links_and_traversal(user_id):
-    from memory.graph import upsert_node, create_link, get_backlinks, traverse_graph
+    from medhas.memory.graph import upsert_node, create_link, get_backlinks, traverse_graph
     a = await upsert_node(user_id, "Kraionyx", "Company")
     b = await upsert_node(user_id, "Nikhil", "Person")
     c = await upsert_node(user_id, "KareOS", "Product")
@@ -311,9 +311,9 @@ async def test_gbrain_typed_links_and_traversal(user_id):
 # --- NEW (GBrain): capture front-door + dream multi-phase cycle ---
 @pytest.mark.asyncio
 async def test_gbrain_capture_and_dream(user_id):
-    from pipeline.agent_graph import UnifiedMemoryEngine
-    from memory.atomic.dream_cycle import run_dream_cycle
-    from memory.atomic import get_all_active_facts
+    from medhas.pipeline.agent_graph import UnifiedMemoryEngine
+    from medhas.memory.atomic.dream_cycle import run_dream_cycle
+    from medhas.memory.atomic import get_all_active_facts
     engine = UnifiedMemoryEngine()
     # capture = single ingestion front-door (synchronous for test)
     res = await engine.capture(user_id, "User prefers local-first, self-hostable tools", background=False)
@@ -330,7 +330,7 @@ async def test_gbrain_capture_and_dream(user_id):
 # --- NEW (Gap 3: Graphiti episode resolution layer) ---
 @pytest.mark.asyncio
 async def test_episodes_resolution_layer(user_id):
-    from memory.episodes import add_episode, get_episode, get_episodes, EpisodeType
+    from medhas.memory.episodes import add_episode, get_episode, get_episodes, EpisodeType
     ep_id = await add_episode(
         user_id, name="onboarding", episode_body="User said they prefer PostgreSQL.",
         source_description="chat message", reference_time=None, source=EpisodeType.message,
@@ -345,7 +345,7 @@ async def test_episodes_resolution_layer(user_id):
 # --- NEW (Gap 1: extractor within-batch entity/fact dedup) ---
 @pytest.mark.asyncio
 async def test_extractor_within_batch_dedup(user_id):
-    from pipeline.async_extractor import extract_and_persist_background
+    from medhas.pipeline.async_extractor import extract_and_persist_background
     payload = {
         "facts": [
             "TechCorp builds KareOS",
@@ -358,15 +358,15 @@ async def test_extractor_within_batch_dedup(user_id):
         ],
     }
     import json
-    from pipeline import async_extractor
+    from medhas.pipeline import async_extractor
     async def fake_chat(messages, temperature=0.0):
         return {"content": "```json\n" + json.dumps(payload) + "\n```"}
     async_extractor.extractor_llm.chat_completion = fake_chat
 
     await extract_and_persist_background(user_id, "User uses TechCorp tools", "KareOS is built by TechCorp")
-    from memory.atomic import get_all_active_facts
-    from infrastructure.db import DatabasePool
-    from memory.atomic import memory_crud
+    from medhas.memory.atomic import get_all_active_facts
+    from medhas.storage import DatabasePool
+    from medhas.memory.atomic import memory_crud
     facts = await get_all_active_facts(user_id)
     kr_facts = [f for f in facts if "KareOS" in f["fact_text"] or "TechCorp" in f["fact_text"]]
     assert len(kr_facts) == 1, f"expected 1 deduped fact, got {len(kr_facts)}: {[f['fact_text'] for f in kr_facts]}"
@@ -384,10 +384,10 @@ async def test_extractor_within_batch_dedup(user_id):
 # --- NEW (Gap 2: archival cold tier + conversation recall wired) ---
 @pytest.mark.asyncio
 async def test_archival_and_recall_tiers(user_id):
-    from memory.archival import archive_memory, recall_archival, retrieve_memory
-    from memory.session.recall import recall_conversation
+    from medhas.memory.archival import archive_memory, recall_archival, retrieve_memory
+    from medhas.memory.session.recall import recall_conversation
     from uuid import uuid4
-    from memory.session import get_transcript
+    from medhas.memory.session import get_transcript
     aid = await archive_memory(user_id, "Cold fact: user migrated off AWS to local infra")
     recalled = await recall_archival(user_id, "local infra migration", limit=3)
     assert any(r["id"] == aid for r in recalled), "archival recall should return the archived memory"

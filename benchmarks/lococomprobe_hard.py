@@ -10,9 +10,9 @@ Run: POSTGRES_DB=medhas_test python -m benchmarks.lococomprobe_hard
 import asyncio
 from datetime import datetime, timezone
 
-from infrastructure.db import DatabasePool, initialize_schema
-from agi import engine
-from infrastructure.llm.embedding_provider import FastEmbeddingProvider
+from medhas.storage import DatabasePool, initialize_schema
+from medhas.engine import engine
+from medhas.embeddings import FastEmbeddingProvider
 import uuid as _uuid
 import hashlib
 

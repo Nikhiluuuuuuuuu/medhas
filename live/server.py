@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel, Field
 
-from infrastructure.db import DatabasePool, initialize_schema
+from medhas.storage import DatabasePool, initialize_schema
 from memory.session import create_session, get_transcript
 from memory.working import get_blocks, update_block, create_memory_block, delete_memory_block, audit_memory_doctor, auto_archive_context_window
 from memory.atomic import insert_fact, search_facts, search_facts_dual_level, get_all_active_facts, run_dream_cycle

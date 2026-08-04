@@ -6,15 +6,15 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from infrastructure.db import DatabasePool, initialize_schema
-from memory.session import create_session, get_transcript
-from memory.working import get_blocks
-from memory.atomic import search_facts, insert_fact, get_all_active_facts, run_dream_cycle, purge_user_memories
-from memory.atomic.ebbinghaus_decay import reinforce_synaptic_memory
-from memory.graph import upsert_node, query_subgraph, query_point_in_time, run_spreading_activation, update_bayesian_belief
-from memory.procedural import store_skill_playbook
-from pipeline import UnifiedMemoryEngine
-from utils import logger, measure_latency
+from medhas.storage import DatabasePool, initialize_schema
+from medhas.memory.session import create_session, get_transcript
+from medhas.memory.working import get_blocks
+from medhas.memory.atomic import search_facts, insert_fact, get_all_active_facts, run_dream_cycle, purge_user_memories
+from medhas.memory.atomic.ebbinghaus_decay import reinforce_synaptic_memory
+from medhas.memory.graph import upsert_node, query_subgraph, query_point_in_time, run_spreading_activation, update_bayesian_belief
+from medhas.memory.procedural import store_skill_playbook
+from medhas.pipeline import UnifiedMemoryEngine
+from medhas.utils import logger, measure_latency
 
 import sys
 
@@ -38,7 +38,7 @@ async def run_production_test_suite():
     await purge_user_memories(user_id)
 
     # 3. Warmup Embedding Provider ONCE globally
-    from infrastructure.llm import FastEmbeddingProvider
+    from medhas.llm import FastEmbeddingProvider
     embedder = FastEmbeddingProvider()
     await embedder.embed_text("warmup")
 

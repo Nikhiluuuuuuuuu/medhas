@@ -25,7 +25,7 @@ def _uid() -> str:
 
 
 async def _seed(conn, user_id, text, *, valid_from=None, belief=1.0):
-    from infrastructure.llm.embedding_provider import FastEmbeddingProvider
+    from medhas.llm.embedding_provider import FastEmbeddingProvider
     import hashlib
 
     provider = FastEmbeddingProvider()
@@ -49,8 +49,8 @@ async def _seed(conn, user_id, text, *, valid_from=None, belief=1.0):
 # G1: provenance + confidence surfaced by the retrieval layer (search_facts)
 # ---------------------------------------------------------------------------
 async def test_g1_provenance_surfaced_in_retrieval():
-    from infrastructure.db import DatabasePool
-    from memory.atomic.search_facts import search_facts
+    from medhas.storage import DatabasePool
+    from medhas.memory.atomic.search_facts import search_facts
 
     uid = _uid()
     async with DatabasePool.acquire() as c:
@@ -70,8 +70,8 @@ async def test_g1_provenance_surfaced_in_retrieval():
 # G2: a new contradicting fact SUPERSEDES the old one (valid_to closed)
 # ---------------------------------------------------------------------------
 async def test_g2_contradiction_supersedes_old_fact():
-    from infrastructure.db import DatabasePool
-    from agi.engine import engine
+    from medhas.storage import DatabasePool
+    from medhas.engine import engine
 
     uid = _uid()
     await engine.remember(uid, "Nikhil lives in Bangalore")
@@ -98,8 +98,8 @@ async def test_g2_contradiction_supersedes_old_fact():
 # G3: undated fact still answers a temporal "what was true at T" query
 # ---------------------------------------------------------------------------
 async def test_g3_undated_fact_valid_at():
-    from infrastructure.db import DatabasePool
-    from agi.bitemporal import facts_valid_at
+    from medhas.storage import DatabasePool
+    from medhas.memory.graph.bitemporal import facts_valid_at
 
     uid = _uid()
     probe = datetime(2030, 1, 1, tzinfo=timezone.utc)  # after the default valid_from (now)
@@ -115,9 +115,9 @@ async def test_g3_undated_fact_valid_at():
 # G4: LOCOMO-style benchmark suite runs with NO LLM calls
 # ---------------------------------------------------------------------------
 async def test_g4_locomo_eval_suite_runs():
-    from infrastructure.db import DatabasePool
-    from agi.engine import engine
-    from agi.eval import EvalCase, run_eval_suite
+    from medhas.storage import DatabasePool
+    from medhas.engine import engine
+    from medhas.platform.eval import EvalCase, run_eval_suite
 
     uid = _uid()
     async with DatabasePool.acquire() as c:
@@ -131,7 +131,7 @@ async def test_g4_locomo_eval_suite_runs():
     # Benchmark the deterministic retrieval layer (search_facts) — no LLM, no
     # abstention gate, stable for CI. (engine.recall adds reconsolidation/abstention
     # on top; the eval harness measures raw retrieval quality.)
-    from memory.atomic.search_facts import search_facts
+    from medhas.memory.atomic.search_facts import search_facts
     metrics = await run_eval_suite(
         uid, cases, recall_fn=lambda u, q, **kw: search_facts(u, q, limit=5)
     )

@@ -15,10 +15,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from infrastructure.db import DatabasePool, initialize_schema
-from agi.engine import engine as e
-from utils.dates import extract_fact_date
-from agi.anaphora import resolve_query_entities, _most_salient_person
+from medhas.storage import DatabasePool, initialize_schema
+from medhas.engine import engine as e
+from medhas.utils.dates import extract_fact_date
+from medhas.extraction.anaphora import resolve_query_entities, _most_salient_person
 
 
 async def _cleanup(uid: str):
@@ -148,8 +148,8 @@ async def test_h3_multihop_graph_traversal_bridges_entities():
             "Kraionyx builds KareOS as its flagship product",
         ]
         await e.remember_batch(uid, facts, delay=1.5)
-        from agi.multihop import multihop_recall
-        from memory.atomic import search_facts
+        from medhas.extraction.multihop import multihop_recall
+        from medhas.memory.atomic import search_facts
         hits = await search_facts(uid, "KareOS", limit=5)
         extra = await multihop_recall(uid, "who co-founded the company that builds KareOS", hits, max_facts=8)
         texts = [f["fact_text"].lower() for f in extra]

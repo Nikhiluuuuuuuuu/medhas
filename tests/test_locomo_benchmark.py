@@ -19,7 +19,7 @@ def _uid() -> str:
 
 
 async def _seed_all(conn, user_id):
-    from infrastructure.llm.embedding_provider import FastEmbeddingProvider
+    from medhas.llm.embedding_provider import FastEmbeddingProvider
     import hashlib
 
     provider = FastEmbeddingProvider()
@@ -39,9 +39,9 @@ async def _seed_all(conn, user_id):
 
 
 async def test_locomo_benchmark_suite():
-    from infrastructure.db import DatabasePool
-    from memory.atomic.search_facts import search_facts
-    from agi.eval import EvalCase, run_eval_suite
+    from medhas.storage import DatabasePool
+    from medhas.memory.atomic.search_facts import search_facts
+    from medhas.platform.eval import EvalCase, run_eval_suite
 
     uid = _uid()
     async with DatabasePool.acquire() as c:

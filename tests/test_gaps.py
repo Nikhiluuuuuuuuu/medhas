@@ -18,7 +18,7 @@ def _uid() -> str:
 
 
 async def _seed(conn, user_id, text, valid_from=None):
-    from infrastructure.llm.embedding_provider import FastEmbeddingProvider
+    from medhas.llm.embedding_provider import FastEmbeddingProvider
     import hashlib
     provider = FastEmbeddingProvider()
     vec = await provider.embed_text(text)
@@ -37,7 +37,7 @@ async def _seed(conn, user_id, text, valid_from=None):
 
 async def test_g1_valid_from_populated():
     """G1: facts must carry a valid_from so temporal queries work."""
-    from infrastructure.db import DatabasePool
+    from medhas.storage import DatabasePool
     uid = _uid()
     async with DatabasePool.acquire() as c:
         await _seed(c, uid, "Nikhil co-founded Kraionyx AI in Hyderabad")
@@ -50,9 +50,9 @@ async def test_g1_valid_from_populated():
 
 async def test_g1_insert_does_not_silently_drop():
     """G1: insert_fact must not return None / silently drop a valid new fact."""
-    from infrastructure.db import DatabasePool
-    from agi.engine import engine
-    from memory.atomic.insert_fact import insert_fact
+    from medhas.storage import DatabasePool
+    from medhas.engine import engine
+    from medhas.memory.atomic.insert_fact import insert_fact
     await DatabasePool.initialize()
     uid = _uid()
     fact = await insert_fact(uid, "Kraionyx builds KareOS as its flagship product", memory_type="semantic")
@@ -68,8 +68,8 @@ async def test_g1_insert_does_not_silently_drop():
 
 async def test_g2_multihop_recall():
     """G2: a 2-hop query returns the co-founder fact via the entity graph."""
-    from infrastructure.db import DatabasePool
-    from agi.engine import engine
+    from medhas.storage import DatabasePool
+    from medhas.engine import engine
     await DatabasePool.initialize()
     uid = _uid()
     facts = [
@@ -89,8 +89,8 @@ async def test_g2_multihop_recall():
 
 async def test_g3_temporal_before():
     """G3: 'before Hyderabad' returns the prior residence (Bangalore)."""
-    from infrastructure.db import DatabasePool
-    from agi.engine import engine
+    from medhas.storage import DatabasePool
+    from medhas.engine import engine
     await DatabasePool.initialize()
     uid = _uid()
     async with DatabasePool.acquire() as c:

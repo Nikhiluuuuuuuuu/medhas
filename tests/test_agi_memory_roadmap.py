@@ -9,12 +9,16 @@ import pytest
 import pytest_asyncio
 import asyncio
 
-from infrastructure.db import DatabasePool, initialize_schema
-from agi import (
-    engine, MemoryType, route, evaluate_admission, sign_write, verify_write,
-    bayesian_update, interference_matrix, eviction_scores, chunk_text,
-    route_query, temporal_consistency_check,
-)
+from medhas.storage import DatabasePool, initialize_schema
+from medhas.engine import engine
+from medhas.memory.control.memory_types import MemoryType, route
+from medhas.memory.control.admission import evaluate_admission
+from medhas.platform.security import sign_write, verify_write
+from medhas.memory.graph.bitemporal import bayesian_update
+from medhas.memory.control.interference import interference_matrix, eviction_scores
+from medhas.memory.operations.ingest import chunk_text
+from medhas.metamemory.metacognitive import route_query
+from medhas.platform.eval import temporal_consistency_check
 
 UID = "agi_test_user"
 
@@ -93,7 +97,7 @@ async def test_engine_remember_recall():
 
 
 async def test_prospective_memory():
-    from agi import add_intention, check_cues
+    from medhas.engine import add_intention, check_cues
     iid = await add_intention(UID, "Remind me to submit the report", cue_text="submit the report")
     assert iid is not None
     fired = await check_cues(UID, current_context="Remember to submit the report today")
@@ -101,8 +105,8 @@ async def test_prospective_memory():
 
 
 async def test_bitemporal_contradiction():
-    from agi import invalidate_fact
-    from memory.atomic import insert_fact
+    from medhas.engine import invalidate_fact
+    from medhas.memory.atomic import insert_fact
     from datetime import datetime, timezone
     f1 = await insert_fact(UID, "The project deadline is March 1", memory_type="semantic")
     f2 = await insert_fact(UID, "The project deadline is April 15", memory_type="semantic")
@@ -114,8 +118,8 @@ async def test_bitemporal_contradiction():
 
 
 async def test_forgetting_and_protected():
-    from agi import protect_core_memories, run_forgetting_sweep
-    from memory.atomic import insert_fact
+    from medhas.engine import protect_core_memories, run_forgetting_sweep
+    from medhas.memory.atomic import insert_fact
     # high-importance memory should become protected and survive forgetting
     f = await insert_fact(UID, "Core identity fact", memory_type="semantic")
     async with DatabasePool.acquire() as conn:
@@ -133,7 +137,7 @@ async def test_forgetting_and_protected():
 
 
 async def test_sensory_buffer():
-    from agi import buffer_percept, promote_percepts, list_buffer
+    from medhas.engine import buffer_percept, promote_percepts, list_buffer
     pid = await buffer_percept(UID, "Invoice total is 1042 USD from vendor Acme", modality="document")
     assert pid is not None
     buf = await list_buffer(UID)
@@ -143,7 +147,7 @@ async def test_sensory_buffer():
 
 
 async def test_export_roundtrip():
-    from agi import export_user_memory, import_user_memory
+    from medhas.engine import export_user_memory, import_user_memory
     await engine.remember(UID, "Exportable fact about the user", source="user")
     bundle = await export_user_memory(UID)
     assert bundle["user_id"] == UID
@@ -151,8 +155,8 @@ async def test_export_roundtrip():
 
 
 async def test_set_affect_and_spaced_review():
-    from agi import set_affect, schedule_review, due_for_review, retention
-    from memory.atomic import insert_fact
+    from medhas.engine import set_affect, schedule_review, due_for_review, retention
+    from medhas.memory.atomic import insert_fact
     f = await insert_fact(UID, "Affective test fact")
     await set_affect(f.id, 0.6, 0.4)
     async with DatabasePool.acquire() as conn:

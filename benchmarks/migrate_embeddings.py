@@ -11,9 +11,9 @@ Run: POSTGRES_DB=medhas_test python -m benchmarks.migrate_embeddings
 import asyncio
 from typing import List, Tuple
 
-from infrastructure.db import DatabasePool, initialize_schema
-from infrastructure.llm.embedding_provider import FastEmbeddingProvider
-from utils import logger
+from medhas.storage import DatabasePool, initialize_schema
+from medhas.embeddings import FastEmbeddingProvider
+from medhas.utils import logger
 
 
 # (table, text_column, id_column) — all embedding-bearing tables

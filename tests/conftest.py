@@ -1,7 +1,7 @@
 """Pytest configuration for Medhas memory-engine regression suite.
 
 Uses a dedicated test database (medhas_test) so the suite never touches dev
-data. Connection settings come from config.settings, overridden here to point
+data. Connection settings come from medhas.config.settings, overridden here to point
 at the test DB.
 
 Schema initialization is session-scoped (NOT per-test): every test module used
@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("POSTGRES_DB", "medhas_test")
 os.environ.setdefault("GROQ_API_KEY", "test_key_placeholder")
 
-from infrastructure.db import DatabasePool, initialize_schema  # noqa: E402
+from medhas.storage import DatabasePool, initialize_schema  # noqa: E402
 
 # ---- Single session-scoped schema init --------------------------------
 # Previously every test module declared its own function-scoped autouse fixture that

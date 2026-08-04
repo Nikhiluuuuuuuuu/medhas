@@ -13,8 +13,8 @@ import tempfile
 
 import pytest
 
-from agi import engine as eng  # shared MemoryEngine instance (agi/__init__ exports it)
-from infrastructure.db import DatabasePool
+from medhas.engine import engine as eng  # shared MemoryEngine instance (agi/__init__ exports it)
+from medhas.storage import DatabasePool
 
 
 async def test_engine_api_methods_are_real_class_methods():
@@ -62,7 +62,7 @@ async def test_forget_user_purges(user_id):
 
 
 async def test_think_pipeline_runs_and_persists(user_id):
-    from agi.cognition.embodiment import BodyModel, ensure_body_schema
+    from medhas.cognition.embodiment import BodyModel, ensure_body_schema
     await ensure_body_schema()
     body = BodyModel(user_id)
     body.register_capability("notify", lambda ctx, params: f"notified:{params.get('who')}")

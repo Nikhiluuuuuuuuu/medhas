@@ -13,17 +13,17 @@ import uvicorn
 from uuid import UUID
 import os
 
-from infrastructure.db import DatabasePool, initialize_schema
-from memory.session import create_session, get_transcript
-from memory.working import get_blocks, update_block
-from memory.atomic import search_facts, get_all_active_facts, run_dream_cycle, purge_user_memories
-from memory.graph import query_point_in_time, query_subgraph, run_spreading_activation
-from memory.graph.export_graph import export_knowledge_graph
-from memory.procedural import store_skill_playbook
-from pipeline import UnifiedMemoryEngine
+from medhas.storage import DatabasePool, initialize_schema
+from medhas.memory.session import create_session, get_transcript
+from medhas.memory.working import get_blocks, update_block
+from medhas.memory.atomic import search_facts, get_all_active_facts, run_dream_cycle, purge_user_memories
+from medhas.memory.graph import query_point_in_time, query_subgraph, run_spreading_activation
+from medhas.memory.graph.export_graph import export_knowledge_graph
+from medhas.memory.procedural import store_skill_playbook
+from medhas.pipeline import UnifiedMemoryEngine
 
 # Roadmap AGI-memory endpoints (E1–E37), additive router — does not touch existing routes.
-from agi.api import router as agi_router
+from medhas.platform.api import router as agi_router
 
 app = FastAPI(
     title="AGI Unified Memory Engine API",

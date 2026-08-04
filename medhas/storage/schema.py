@@ -1,0 +1,56 @@
+"""Database Schema Initialization & Migration Module."""
+
+import os
+from medhas.storage.connection import DatabasePool
+from medhas.utils import logger, measure_latency
+from medhas.core.exceptions import StorageOperationError
+
+INIT_SQL_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "schema.sql")
+
+async def initialize_schema() -> None:
+    """Read schema.sql and execute table setup DDL via asyncpg."""
+    if not os.path.exists(INIT_SQL_PATH):
+        raise StorageOperationError(f"schema.sql file not found at {INIT_SQL_PATH}")
+
+    with open(INIT_SQL_PATH, "r", encoding="utf-8") as f:
+        sql_script = f.read()
+
+    try:
+        async with measure_latency("initialize_schema"):
+            async with DatabasePool.acquire() as conn:
+                await conn.execute(sql_script)
+                await conn.execute("ALTER TABLE atomic_facts ADD COLUMN IF NOT EXISTS importance_score FLOAT NOT NULL DEFAULT 5.0;")
+                await conn.execute("ALTER TABLE atomic_facts ADD COLUMN IF NOT EXISTS session_id UUID NULL;")
+                await conn.execute("ALTER TABLE atomic_facts ADD COLUMN IF NOT EXISTS agent_id VARCHAR(255) NULL;")
+                await conn.execute("ALTER TABLE atomic_facts ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) NULL;")
+                await conn.execute("ALTER TABLE atomic_facts ADD COLUMN IF NOT EXISTS run_id VARCHAR(255) NULL;")
+                await conn.execute("ALTER TABLE atomic_facts ADD COLUMN IF NOT EXISTS categories TEXT[] NULL;")
+                await conn.execute("ALTER TABLE atomic_facts ADD COLUMN IF NOT EXISTS memory_type VARCHAR(50) NOT NULL DEFAULT 'semantic';")
+                await conn.execute("ALTER TABLE atomic_facts ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_atomic_facts_user_hash ON atomic_facts(user_id, content_hash) WHERE content_hash IS NOT NULL;")
+                await conn.execute("ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS session_id UUID NULL;")
+                await conn.execute("ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS agent_id VARCHAR(255) NULL;")
+                await conn.execute("ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS embedding vector(768) NULL;")
+                await conn.execute("ALTER TABLE graph_nodes ADD COLUMN IF NOT EXISTS fact_ids UUID[] NULL;")
+                await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS session_id UUID NULL;")
+                await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS agent_id VARCHAR(255) NULL;")
+                await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS link_type VARCHAR(100) NULL;")
+                await conn.execute("ALTER TABLE graph_edges ADD COLUMN IF NOT EXISTS link_source VARCHAR(50) NOT NULL DEFAULT 'extracted';")
+                await conn.execute("CREATE TABLE IF NOT EXISTS episodes (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id VARCHAR(255) NOT NULL, session_id UUID NULL, agent_id VARCHAR(255) NULL, content TEXT NOT NULL, source VARCHAR(50) NOT NULL DEFAULT 'message', reference_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);")
+                # Graphiti episode resolution layer: source_description + group_id (graphiti_core/graphiti.py:980 add_episode)
+                await conn.execute("ALTER TABLE episodes ADD COLUMN IF NOT EXISTS source_description VARCHAR(255) NULL;")
+                await conn.execute("ALTER TABLE episodes ADD COLUMN IF NOT EXISTS group_id VARCHAR(255) NULL;")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_user_time ON episodes(user_id, reference_time DESC);")
+                await conn.execute("CREATE TABLE IF NOT EXISTS archival_memory (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id VARCHAR(255) NOT NULL, agent_id VARCHAR(255) NULL, content TEXT NOT NULL, embedding vector(768) NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_atomic_facts_fts ON atomic_facts USING gin(to_tsvector('english', fact_text));")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_archival_user ON archival_memory(user_id);")
+                # Letta recall tier: semantic recall over conversation history (memory/session/recall.py)
+                await conn.execute("ALTER TABLE messages ADD COLUMN IF NOT EXISTS embedding vector(768) NULL;")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_embedding ON messages USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);")
+        # AGI memory roadmap (E1–E37): additive schema extensions, idempotent.
+        from medhas.storage.agi_schema import initialize_agi_schema
+        await initialize_agi_schema()
+        logger.info("✅ Database schema & vector HNSW indexes initialized.")
+    except Exception as e:
+        logger.error(f"❌ Failed to execute schema DDL: {e}")
+        raise StorageOperationError(f"Schema DDL execution failed: {e}")

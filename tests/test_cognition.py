@@ -10,10 +10,10 @@ import uuid
 
 import pytest
 
-from infrastructure.db import DatabasePool, initialize_schema
-from agi.cognition import perception, reasoning, generalization
-from agi.cognition.embodiment import BodyModel, ensure_body_schema
-from agi import engine as e
+from medhas.storage import DatabasePool, initialize_schema
+from medhas.cognition import perception, reasoning, generalization
+from medhas.cognition.embodiment import BodyModel, ensure_body_schema
+from medhas.engine import engine as e
 
 PG = os.environ.get("POSTGRES_DB", "medhas_test")
 
@@ -144,10 +144,10 @@ async def test_engine_think_runs_pipeline_offline():
 # OPEN RELATION VOCABULARY (schema evolution) — the relation set is NOT hard-coded
 # ---------------------------------------------------------------------------
 async def test_relation_vocabulary_grows_not_hardcoded():
-    from agi.cognition.schema_evolution import (
+    from medhas.cognition.schema_evolution import (
         record_relation, known_relations, seed_default_relations,
     )
-    from agi.cognition.reasoning import default_rules
+    from medhas.cognition.reasoning import default_rules
     uid = _uid()
     try:
         await initialize_schema()
@@ -192,7 +192,7 @@ async def test_extract_graph_open_records_relations_online():
     # Online path: the LLM emits relations (no closed vocabulary) and each discovered
     # relation is recorded into the evolving relation_types vocabulary. Proves extraction
     # is open / LLM-driven, not a frozen hard-coded list.
-    from agi.llm_extract import extract_graph_open
+    from medhas.extraction.llm_extract import extract_graph_open
     uid = _uid()
     try:
         await initialize_schema()
@@ -201,7 +201,7 @@ async def test_extract_graph_open_records_relations_online():
         )
         rels = {r for _s, r, _o in triples}
         assert "FOUNDED" in rels and "WORKS_AT" in rels, rels
-        from agi.cognition.schema_evolution import known_relations
+        from medhas.cognition.schema_evolution import known_relations
         known = await known_relations(uid)
         assert "FOUNDED" in known and "WORKS_AT" in known, known
     finally:

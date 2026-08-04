@@ -19,11 +19,11 @@ import uuid
 
 import pytest
 
-from config import settings
+from medhas.config import settings
 
-from infrastructure.db import DatabasePool, initialize_schema
-from agi.engine import engine as e
-from agi.llm_extract import extract_graph_open, extract_date_open, resolve_entities_open
+from medhas.storage import DatabasePool, initialize_schema
+from medhas.engine import engine as e
+from medhas.extraction.llm_extract import extract_graph_open, extract_date_open, resolve_entities_open
 
 
 async def _cleanup(uid: str):

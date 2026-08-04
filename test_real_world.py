@@ -1,14 +1,14 @@
 """Verification test for Cognee + Graphiti + Letta + Mem0 + LightRAG + HippoRAG full SOTA integration."""
 
 import asyncio
-from infrastructure.db import DatabasePool, initialize_schema
-from memory.session import create_session
-from memory.procedural import store_skill_playbook, get_skill_playbook
-from memory.working import create_memory_block, audit_memory_doctor, auto_archive_context_window
-from memory.atomic import insert_fact, search_facts, search_facts_dual_level, purge_user_memories
-from memory.graph import upsert_node, update_edge, run_spreading_activation, export_knowledge_graph
-from pipeline import UnifiedMemoryEngine
-from pipeline.hot_path import extract_seed_terms
+from medhas.storage import DatabasePool, initialize_schema
+from medhas.memory.session import create_session
+from medhas.memory.procedural import store_skill_playbook, get_skill_playbook
+from medhas.memory.working import create_memory_block, audit_memory_doctor, auto_archive_context_window
+from medhas.memory.atomic import insert_fact, search_facts, search_facts_dual_level, purge_user_memories
+from medhas.memory.graph import upsert_node, update_edge, run_spreading_activation, export_knowledge_graph
+from medhas.pipeline import UnifiedMemoryEngine
+from medhas.pipeline.hot_path import extract_seed_terms
 
 async def run_real_world_tests():
     print("=== STARTING SOTA FEATURE INTEGRATION VERIFICATION (LightRAG + HippoRAG + Cognee + Graphiti + Letta + Mem0) ===")
